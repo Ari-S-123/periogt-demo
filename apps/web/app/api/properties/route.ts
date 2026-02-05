@@ -1,5 +1,7 @@
 import { modalFetch, proxyResponse, handleProxyError } from "@/lib/modal-proxy";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const requestId = crypto.randomUUID();
 

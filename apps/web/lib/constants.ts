@@ -1,4 +1,7 @@
-export const PROPERTY_DISPLAY: Record<string, { label: string; units: string }> = {
+export const PROPERTY_DISPLAY: Record<
+  string,
+  { label: string; units: string }
+> = {
   eat: { label: "Atomization energy", units: "eV" },
   eps: { label: "Dielectric constant (ε)", units: "" },
   density: { label: "Density", units: "g/cm³" },

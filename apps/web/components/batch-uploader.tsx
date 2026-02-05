@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import Papa from "papaparse";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import { MAX_BATCH_SIZE } from "@/lib/constants";
 
 interface BatchRow {
@@ -75,13 +76,28 @@ export function BatchUploader({ onParsed, disabled }: BatchUploaderProps) {
     if (file) handleFile(file);
   }
 
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (disabled) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      fileRef.current?.click();
+    }
+  }
+
   return (
     <div className="space-y-2">
       <Card
-        className={`border-dashed ${disabled ? "opacity-50" : "cursor-pointer hover:border-foreground/30"}`}
+        className={cn(
+          "border-dashed",
+          disabled ? "opacity-50" : "cursor-pointer hover:border-foreground/30",
+        )}
+        role="button"
+        tabIndex={disabled ? -1 : 0}
+        aria-label="Upload CSV file"
         onDragOver={(e) => e.preventDefault()}
         onDrop={disabled ? undefined : handleDrop}
         onClick={disabled ? undefined : () => fileRef.current?.click()}
+        onKeyDown={handleKeyDown}
       >
         <CardContent className="flex flex-col items-center justify-center py-8 text-center">
           <p className="text-sm text-muted-foreground">
@@ -90,7 +106,8 @@ export function BatchUploader({ onParsed, disabled }: BatchUploaderProps) {
               : "Drop a CSV file here, or click to browse"}
           </p>
           <p className="text-xs text-muted-foreground mt-1">
-            CSV must have a &quot;smiles&quot; column (max {MAX_BATCH_SIZE} rows)
+            CSV must have a &quot;smiles&quot; column (max {MAX_BATCH_SIZE}{" "}
+            rows)
           </p>
         </CardContent>
       </Card>

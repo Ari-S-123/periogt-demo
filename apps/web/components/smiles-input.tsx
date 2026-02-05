@@ -7,11 +7,18 @@ import { EXAMPLE_SMILES } from "@/lib/constants";
 interface SmilesInputProps {
   value: string;
   onChange: (value: string) => void;
+  onBlur?: () => void;
   error?: string;
   disabled?: boolean;
 }
 
-export function SmilesInput({ value, onChange, error, disabled }: SmilesInputProps) {
+export function SmilesInput({
+  value,
+  onChange,
+  onBlur,
+  error,
+  disabled,
+}: SmilesInputProps) {
   return (
     <div className="space-y-2">
       <Label htmlFor="smiles">Polymer SMILES</Label>
@@ -20,6 +27,7 @@ export function SmilesInput({ value, onChange, error, disabled }: SmilesInputPro
         placeholder="Enter polymer repeat-unit SMILES with * connection points, e.g. *CC*"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
         disabled={disabled}
         className="font-mono text-sm"
         rows={3}

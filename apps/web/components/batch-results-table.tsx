@@ -10,7 +10,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import type { BatchPredictResponse, PredictResponse, ErrorDetail } from "@/lib/schemas";
+import type {
+  BatchPredictResponse,
+  PredictResponse,
+  ErrorDetail,
+} from "@/lib/schemas";
 
 interface BatchResultsTableProps {
   response: BatchPredictResponse;
@@ -28,7 +32,9 @@ export function BatchResultsTable({ response }: BatchResultsTableProps) {
     const rows = results
       .map((r) => {
         if (isError(r)) {
-          const details = r.details as { smiles?: string; property?: string } | undefined;
+          const details = r.details as
+            | { smiles?: string; property?: string }
+            | undefined;
           return `"${details?.smiles ?? ""}","${details?.property ?? ""}","","","error: ${r.message}"`;
         }
         return `"${r.smiles}","${r.property}","${r.prediction.value}","${r.prediction.units}","ok"`;
@@ -40,19 +46,23 @@ export function BatchResultsTable({ response }: BatchResultsTableProps) {
     const a = document.createElement("a");
     a.href = url;
     a.download = "periogt_batch_results.csv";
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
 
-  const okCount = results.filter((r) => !isError(r)).length;
-  const errCount = results.filter((r) => isError(r)).length;
+  const errCount = results.reduce((n, r) => n + (isError(r) ? 1 : 0), 0);
+  const okCount = results.length - errCount;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Badge variant="secondary">{okCount} success</Badge>
-          {errCount > 0 && <Badge variant="destructive">{errCount} errors</Badge>}
+          {errCount > 0 && (
+            <Badge variant="destructive">{errCount} errors</Badge>
+          )}
         </div>
         <Button variant="outline" size="sm" onClick={handleDownloadCSV}>
           Download CSV
@@ -72,10 +82,14 @@ export function BatchResultsTable({ response }: BatchResultsTableProps) {
           <TableBody>
             {results.map((r, i) => {
               if (isError(r)) {
-                const details = r.details as { smiles?: string; property?: string } | undefined;
+                const details = r.details as
+                  | { smiles?: string; property?: string }
+                  | undefined;
                 return (
                   <TableRow key={i}>
-                    <TableCell className="text-muted-foreground">{i + 1}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {i + 1}
+                    </TableCell>
                     <TableCell className="font-mono text-xs max-w-48 truncate">
                       {details?.smiles ?? "—"}
                     </TableCell>
@@ -92,7 +106,9 @@ export function BatchResultsTable({ response }: BatchResultsTableProps) {
               }
               return (
                 <TableRow key={i}>
-                  <TableCell className="text-muted-foreground">{i + 1}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {i + 1}
+                  </TableCell>
                   <TableCell className="font-mono text-xs max-w-48 truncate">
                     {r.smiles}
                   </TableCell>

@@ -27,7 +27,12 @@
       "Bash(npx next:*)",
       "Bash(bunx shadcn@latest add:*)",
       "Bash(python -c:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(xargs -I {} sh -c 'echo \"\"=== {} ===\"\" && head -20 {}')",
+      "Bash(npx shadcn@latest add:*)",
+      "Bash(bun run build)",
+      "Bash(bun run lint)",
+      "Bash(bun run format:*)"
     ]
   }
 }

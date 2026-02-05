@@ -88,8 +88,17 @@ export const healthResponseSchema = z.object({
   gpu_available: z.boolean(),
 });
 
+// --- Form schemas (no .default() for react-hook-form compatibility) ---
+
+export const predictFormSchema = z.object({
+  smiles: smilesSchema,
+  property: z.string().min(1, "Property is required"),
+  return_embedding: z.boolean(),
+});
+
 // --- Inferred types ---
 
+export type PredictFormValues = z.infer<typeof predictFormSchema>;
 export type PredictRequest = z.infer<typeof predictRequestSchema>;
 export type PredictResponse = z.infer<typeof predictResponseSchema>;
 export type EmbeddingRequest = z.infer<typeof embeddingRequestSchema>;

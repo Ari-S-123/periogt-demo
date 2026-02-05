@@ -40,12 +40,16 @@ export async function proxyResponse(
   res: Response,
   requestId: string,
 ): Promise<NextResponse> {
+  const text = await res.text();
   let data: unknown;
   try {
-    data = await res.json();
+    data = JSON.parse(text);
   } catch {
-    const text = await res.text().catch(() => "");
-    console.error("Backend returned non-JSON response:", res.status, text.slice(0, 200));
+    console.error(
+      "Backend returned non-JSON response:",
+      res.status,
+      text.slice(0, 200),
+    );
     return NextResponse.json(
       {
         error: {
@@ -71,13 +75,19 @@ export function handleProxyError(
 ): NextResponse {
   if (error instanceof DOMException && error.name === "AbortError") {
     return NextResponse.json(
-      { error: { code: "timeout", message: "Backend request timed out" }, request_id: requestId },
+      {
+        error: { code: "timeout", message: "Backend request timed out" },
+        request_id: requestId,
+      },
       { status: 504 },
     );
   }
   console.error(`${label} proxy error:`, error);
   return NextResponse.json(
-    { error: { code: "proxy_error", message: "Failed to reach backend" }, request_id: requestId },
+    {
+      error: { code: "proxy_error", message: "Failed to reach backend" },
+      request_id: requestId,
+    },
     { status: 502 },
   );
 }

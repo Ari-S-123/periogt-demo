@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { modalFetch, proxyResponse, handleProxyError } from "@/lib/modal-proxy";
 import { batchPredictRequestSchema } from "@/lib/schemas";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
 
@@ -10,7 +12,10 @@ export async function POST(request: NextRequest) {
     body = await request.json();
   } catch {
     return NextResponse.json(
-      { error: { code: "invalid_json", message: "Invalid JSON body" }, request_id: requestId },
+      {
+        error: { code: "invalid_json", message: "Invalid JSON body" },
+        request_id: requestId,
+      },
       { status: 400 },
     );
   }

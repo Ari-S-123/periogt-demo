@@ -7,8 +7,9 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { BatchUploader } from "@/components/batch-uploader";
 import { BatchResultsTable } from "@/components/batch-results-table";
 import { PropertySelector } from "@/components/property-selector";
+import { useProperties } from "@/hooks/use-properties";
 import { api, ApiError } from "@/lib/api";
-import type { PropertyInfo, BatchPredictResponse } from "@/lib/schemas";
+import type { BatchPredictResponse } from "@/lib/schemas";
 
 interface BatchRow {
   smiles: string;
@@ -17,27 +18,20 @@ interface BatchRow {
 export default function BatchPage() {
   const [rows, setRows] = useState<BatchRow[]>([]);
   const [property, setProperty] = useState("");
-  const [properties, setProperties] = useState<PropertyInfo[]>([]);
-  const [propertiesLoading, setPropertiesLoading] = useState(true);
+  const {
+    properties,
+    loading: propertiesLoading,
+    error: propertiesError,
+  } = useProperties();
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<BatchPredictResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api
-      .properties()
-      .then((res) => {
-        setProperties(res.properties);
-        if (res.properties.length > 0) {
-          setProperty(res.properties[0].id);
-        }
-      })
-      .catch((err) => {
-        console.error("Failed to load properties:", err);
-        setError("Failed to load available properties from the backend.");
-      })
-      .finally(() => setPropertiesLoading(false));
-  }, []);
+    if (properties.length > 0 && !property) {
+      setProperty(properties[0].id);
+    }
+  }, [properties, property]);
 
   const handleSubmit = useCallback(async () => {
     setError(null);
@@ -100,9 +94,9 @@ export default function BatchPage() {
         </CardContent>
       </Card>
 
-      {error && (
+      {(error || propertiesError) && (
         <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{error || propertiesError}</AlertDescription>
         </Alert>
       )}
 

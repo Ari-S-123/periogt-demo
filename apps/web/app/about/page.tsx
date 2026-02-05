@@ -1,9 +1,5 @@
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import type { Metadata } from "next";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -13,6 +9,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { PROPERTY_DISPLAY } from "@/lib/constants";
+
+export const metadata: Metadata = {
+  title: "About — PerioGT",
+  description:
+    "Model information, supported properties, and citation details for the PerioGT polymer property prediction model.",
+};
 
 export default function AboutPage() {
   const properties = Object.entries(PROPERTY_DISPLAY);
@@ -34,9 +36,10 @@ export default function AboutPage() {
           <p>
             <strong>PerioGT</strong> (Periodic Graph Transformer) is a
             graph-based deep learning model for polymer property prediction. It
-            uses a pretrained graph transformer backbone with knowledge-augmented
-            prompts from oligomer representations to predict various
-            physicochemical properties of polymers from their repeat-unit SMILES.
+            uses a pretrained graph transformer backbone with
+            knowledge-augmented prompts from oligomer representations to predict
+            various physicochemical properties of polymers from their
+            repeat-unit SMILES.
           </p>
           <p>
             The model is pretrained on a large corpus of polymer structures and

@@ -28,9 +28,17 @@ export function PropertySelector({
   return (
     <div className="space-y-2">
       <Label htmlFor="property">Target Property</Label>
-      <Select value={value} onValueChange={onChange} disabled={disabled || loading}>
+      <Select
+        value={value}
+        onValueChange={onChange}
+        disabled={disabled || loading}
+      >
         <SelectTrigger id="property" className="w-full">
-          <SelectValue placeholder={loading ? "Loading properties..." : "Select a property"} />
+          <SelectValue
+            placeholder={
+              loading ? "Loading properties..." : "Select a property"
+            }
+          />
         </SelectTrigger>
         <SelectContent>
           {properties.map((prop) => (

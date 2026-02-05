@@ -22,11 +22,13 @@ export function EmbeddingViewer({ embedding }: EmbeddingViewerProps) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-medium">
-          Embedding ({embedding.length}d)
-        </p>
+        <p className="text-sm font-medium">Embedding ({embedding.length}d)</p>
         <div className="flex gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setExpanded(!expanded)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setExpanded(!expanded)}
+          >
             {expanded ? "Collapse" : "Expand"}
           </Button>
           <Button variant="ghost" size="sm" onClick={handleCopy}>

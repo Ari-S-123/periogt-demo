@@ -1,6 +1,6 @@
 # PerioGT Web Prototype PRD (Improved) — Property Prediction API + UI
-**Version:** 1.1  
-**Date:** February 04, 2026  
+**Version:** 1.2
+**Date:** February 04, 2026
 **Author:** Ari (with AI-assisted review)
 
 ---
@@ -43,9 +43,11 @@ The attached PRD includes several choices that will either break deployment or v
 - Using **Axios** in the frontend and API client wrappers instead of Next.js-native `fetch`.  
 - Defining custom UI components rather than using **shadcn/ui**’s generated component patterns.  
 - Using Modal’s deprecated concurrency knobs (`allow_concurrent_inputs`) instead of the newer `@modal.concurrent` approach.  
-- Treating PyTorch + PyTorch Geometric installation as “`pip install torch` / `pip install torch-geometric`”, which is frequently wrong on GPU due to wheel variants and compiled extension wheels.
+- Treating PyTorch + graph library installation as "`pip install torch`", which is frequently wrong on GPU due to wheel variants and compiled extension wheels.
 
 This version fixes those decisions and tightens versions, security controls, and deployment patterns.
+
+> **Note (v1.2):** The implementation uses **DGL** (Deep Graph Library) rather than PyTorch Geometric, matching PerioGT's actual upstream dependencies. References to PyG in the original PRD have been corrected.
 
 ---
 
@@ -74,29 +76,32 @@ Instead, the browser calls `/api/predict` on Next.js, and the server-side route 
 
 ## 5. Technology stack (pinned baselines)
 
-> **Important:** exact patches should be pinned by lockfiles (`pnpm-lock.yaml`, `uv.lock`/`requirements.lock`) in the implementation repo. This PRD pins **known-good baselines** and constrains majors/minors to avoid breakage.
+> **Important:** exact patches should be pinned by lockfiles (`bun.lock`) in the implementation repo. This PRD pins **known-good baselines** and constrains majors/minors to avoid breakage.
 
 ### 5.1 Frontend
 
-- **Next.js:** 16.1.6 (App Router)
-- **Node.js:** >= 20.9 (align with current Next.js system requirements)
-- **React:** >= 19.2.1 (see security note in §11.4)
-- **TypeScript:** >= 5.7
-- **UI:** shadcn/ui (Tailwind v4)
-- **Validation:** zod
+- **Package manager:** Bun (monorepo workspaces)
+- **Next.js:** 16.1.6 (App Router, Turbopack dev server)
+- **React:** 19.2.3
+- **TypeScript:** >= 5
+- **UI:** shadcn/ui (Radix UI + Tailwind v4, PostCSS — no `tailwind.config.ts`)
+- **Validation:** zod v4 (imported as `zod/v4`)
 - **Forms:** react-hook-form
-- **CSV:** papaparse (client parsing) + server-side streaming CSV generation for downloads
+- **CSV:** papaparse (client-side parsing only; results exported client-side)
 
 ### 5.2 Backend (Modal)
 
 - **Python:** 3.11.x (wide ecosystem support for torch + scientific libs)
 - **modal:** 1.3.2
-- **fastapi:** 0.128.0
+- **fastapi:** 0.128.0 (with `[standard]` extras)
 - **pydantic:** >= 2.8,<3
-- **PyTorch:** 2.6.x (see §7.2, PyG compatibility)
-- **PyTorch Geometric:** 2.7.0
-- **RDKit:** installed from PyPI (see §7.3)
-- **uv** (optional): for fast, reproducible dependency sync in CI
+- **PyTorch:** 2.6.0 (CUDA 12.6 wheels from `https://download.pytorch.org/whl/cu126`)
+- **DGL:** Deep Graph Library (CUDA 12.6 build from `https://data.dgl.ai/wheels/torch-2.6/cu126/repo.html`)
+- **DGLLife:** molecular featurizers
+- **Mordred:** molecular descriptor calculator
+- **RDKit:** installed from PyPI
+- **numpy:** < 2 (compatibility constraint)
+- **Other scientific:** scipy, scikit-learn, pandas, networkx, pyyaml
 
 ### 5.3 Storage
 
@@ -133,20 +138,33 @@ At download time:
 
 If checksum fails, delete the file and raise a 500 with a clear operator message.
 
-### 6.3 Runtime mapping of “property → checkpoint”
+### 6.3 Runtime mapping of "property → checkpoint"
 
-The finetuned zip’s internal structure must be inspected once, then a mapping file is generated and stored in the Volume, e.g.:
+The finetuned zip's internal structure is scanned on first boot by `checkpoint_manager.py`, which generates `/vol/checkpoints/index.json`:
 
-`/vol/checkpoints/finetuned/index.json`:
 ```json
 {
-  "eps": "finetuned/light/eps.pth",
-  "density": "finetuned/light/density.pth",
-  "tg": "finetuned/light/tg.pth"
+  "eps": {
+    "checkpoint": "/vol/checkpoints/finetuned_ckpt/eps/best_model.pth",
+    "label": "Dielectric constant (ε)",
+    "units": ""
+  },
+  "tg": {
+    "checkpoint": "/vol/checkpoints/finetuned_ckpt/tg/best_model.pth",
+    "label": "Glass transition temperature (Tg)",
+    "units": "K"
+  }
 }
 ```
 
-The mapping is loaded at runtime to determine which finetuned checkpoint to load for a given requested property.
+The scan looks for `best_model*.pth` files within property-named subdirectories under `finetuned_ckpt/`. Property metadata (labels, units) is defined in `PROPERTY_METADATA` within `checkpoint_manager.py`.
+
+### 6.4 Additional Volume artifacts
+
+Beyond checkpoints, two additional files must be placed on the Volume for production accuracy:
+
+- **`/vol/checkpoints/label_stats.json`** — Per-property mean and std used for denormalization: `{"eps": {"mean": ..., "std": ...}, ...}`. Without this, predictions are raw normalized model outputs.
+- **`/vol/checkpoints/descriptor_scaler.pkl`** — Pre-fitted `sklearn.preprocessing.StandardScaler` for Mordred molecular descriptor normalization. Without this, a scaler is fitted from scratch per request (less accurate).
 
 > This avoids hardcoding guessed filenames and keeps the deployment faithful to the released artifact structure.
 
@@ -156,23 +174,25 @@ The mapping is loaded at runtime to determine which finetuned checkpoint to load
 
 ### 7.1 Modal application shape
 
-- One Modal `App`
-- One GPU-backed class `PerioGTService` holding:
-  - loaded checkpoints
-  - loaded PerioGT model objects
-  - a prediction method
-- One **FastAPI** request handler function decorated with `@modal.fastapi_endpoint(...)` that delegates into the class.
+- One Modal `App` (`"periogt-api"`)
+- One GPU-backed function `periogt_api()` decorated with `@modal.asgi_app(requires_proxy_auth=True)` that returns a FastAPI application
+- Module-level `_state` dict holding loaded models, scaler, label stats, and property index
+- `_ensure_ready()` bootstraps all state on first request (checkpoints, models, label stats, scaler)
+- `@modal.concurrent(max_inputs=4)` for per-container concurrency
+- L4 GPU, `keep_warm=1`, 300s timeout
 
-### 7.2 Torch + PyG installation (GPU correctness)
+### 7.2 Torch + DGL installation (GPU correctness)
 
-PyTorch Geometric relies on compiled extension wheels (e.g., `torch_scatter`, `torch_sparse`). The correct install pattern is:
+PerioGT uses **DGL** (Deep Graph Library), not PyTorch Geometric. The correct install pattern in the Modal image is:
 
-1. Install **GPU-enabled torch** from the official CUDA wheel index (choose a CUDA variant supported by Modal’s GPU runtime).
-2. Install PyG wheels using the PyG wheel index for the exact `torch` + `cuda` combination.
+1. Install **GPU-enabled torch** from the official CUDA wheel index:
+   `.pip_install("torch==2.6.0", index_url="https://download.pytorch.org/whl/cu126")`
+2. Install DGL using CUDA-matched wheels:
+   `.pip_install("dgl", find_links="https://data.dgl.ai/wheels/torch-2.6/cu126/repo.html")`
+3. Install scientific stack including `dgllife`, `mordred`, `rdkit`, `networkx`, `scipy`, `scikit-learn`, `pandas`, `pyyaml`, and `numpy<2`.
+4. System packages: `libgl1-mesa-glx`, `libglib2.0-0` (for OpenCV/RDKit rendering deps).
 
-**Baseline recommendation for reliability:**
-- Use torch **2.6.x** + CUDA 12.6 wheels (cu126), because this combination is explicitly supported by the PyG installation docs.
-- Freeze the exact torch patch and wheel URL in the implementation lockfile.
+The vendored PerioGT source and runtime are added to the image via `add_local_dir`.
 
 ### 7.3 RDKit installation
 
@@ -180,15 +200,15 @@ Install RDKit via pip (PyPI wheels). Ensure system packages include the common r
 
 ### 7.4 Concurrency and cold-start behavior
 
-- Use `@modal.concurrent(max_inputs=...)` to control per-container concurrency.
-- Use `keep_warm` to keep 1–N containers hot for interactive usage.
-- For batch CSV jobs, prefer an async job queue endpoint (`/v1/predict/batch`) and stream results.
+- Use `@modal.concurrent(max_inputs=4)` to control per-container concurrency.
+- Use `keep_warm=1` to keep 1 container hot for interactive usage.
+- Batch endpoint (`/v1/predict/batch`) processes items synchronously in a loop within a single request, returning a JSON response with mixed success/error results. No async job queue or streaming.
 
 ### 7.5 Auth between Next.js and Modal
 
-Use Modal’s built-in proxy auth:
-- set `requires_proxy_auth=True` on `@modal.fastapi_endpoint`,
-- send `Modal-Key` and `Modal-Secret` headers from the Next.js server route handler.
+Use Modal's built-in proxy auth:
+- set `requires_proxy_auth=True` on `@modal.asgi_app`,
+- send `Modal-Key` and `Modal-Secret` headers from the Next.js server route handler via `modalFetch()` in `lib/modal-proxy.ts`.
 Never expose these headers to the browser.
 
 ---
@@ -267,9 +287,26 @@ Returns supported properties based on the finetuned index mapping:
 ```
 
 #### POST `/v1/predict/batch`
-Accept CSV upload (multipart) or JSON list. Returns:
-- either an immediate CSV file response (if small),
-- or a job ID (if large), then poll `/v1/jobs/:id`.
+**Body**
+```json
+{
+  "items": [
+    { "smiles": "*CC*", "property": "tg", "return_embedding": false },
+    { "smiles": "*CC(=O)O*", "property": "eps" }
+  ]
+}
+```
+Accepts a JSON list of predict requests (max 100 items). Returns a synchronous JSON response with mixed results:
+```json
+{
+  "results": [
+    { "smiles": "...", "property": "...", "prediction": {...}, "model": {...}, "request_id": "..." },
+    { "code": "validation_error", "message": "...", "details": {...} }
+  ],
+  "request_id": "..."
+}
+```
+Each item is either a `PredictResponse` (success) or `ErrorDetail` (failure). No CSV upload or job queue.
 
 ---
 
@@ -278,13 +315,13 @@ Accept CSV upload (multipart) or JSON list. Returns:
 ### 9.1 SMILES format (polymer repeat unit)
 
 - Must be valid SMILES under RDKit parsing.
-- Must include polymer connection points using `*` in the format expected by PerioGT datasets.
-- Enforce max length (e.g., 2,000 chars) and max atom count (to protect service).
+- Must include exactly 2 polymer connection points using `*` (enforced server-side via atom count check).
+- Enforce max length (2,000 chars).
 
 ### 9.2 Property validation
 
 - `property` must be one of the IDs returned by `/v1/properties`.
-- If unsupported, return 400 with `error.code="UNSUPPORTED_PROPERTY"`.
+- If unsupported, return 422 with a ValueError message listing supported properties.
 
 ### 9.3 Error taxonomy
 
@@ -317,10 +354,12 @@ All network calls use `fetch`:
 - Client → Next route handler:
   - `POST /api/predict`
   - `POST /api/batch`
+  - `POST /api/embeddings`
   - `GET /api/properties`
+  - `GET /api/health`
 
-- Next route handler → Modal:
-  - `fetch(MODAL_URL, { headers: { "Modal-Key": ..., "Modal-Secret": ... } })`
+- Next route handler → Modal (via `modalFetch()` in `lib/modal-proxy.ts`):
+  - Adds `Modal-Key` and `Modal-Secret` headers, 60s timeout
 
 **Never** call Modal from the browser.
 
@@ -328,14 +367,16 @@ All network calls use `fetch`:
 
 Implement as route handlers:
 
-- `app/api/properties/route.ts`
 - `app/api/predict/route.ts`
 - `app/api/batch/route.ts`
+- `app/api/embeddings/route.ts`
+- `app/api/properties/route.ts`
+- `app/api/health/route.ts`
 
 These handlers:
-- validate input with zod,
-- forward to Modal using server-side `fetch`,
-- normalize errors for consistent UI rendering.
+- validate input with zod (via schemas in `lib/schemas.ts`),
+- forward to Modal using `modalFetch()` from `lib/modal-proxy.ts`,
+- normalize errors via `proxyResponse()` and `handleProxyError()` for consistent UI rendering.
 
 ---
 
@@ -461,7 +502,8 @@ Use PerioGT’s own scripts to generate golden outputs for a small set of SMILES
 - shadcn CLI docs: https://v3.shadcn.com/docs/cli
 - PerioGT paper + artifacts (Zenodo): https://zenodo.org/records/17035498
 - PyTorch: https://pytorch.org/
-- PyTorch Geometric installation: https://pytorch-geometric.readthedocs.io/en/stable/install/installation.html
+- DGL (Deep Graph Library): https://www.dgl.ai/
+- DGL installation: https://www.dgl.ai/pages/start.html
 - RDKit install (PyPI wheels): https://www.rdkit.org/docs/Install.html
 
 
@@ -469,44 +511,62 @@ Use PerioGT’s own scripts to generate golden outputs for a small set of SMILES
 
 ## Appendix A — Recommended repository layout (implementation)
 
-### A.1 Monorepo layout (recommended)
+### A.1 Monorepo layout (actual)
 
 ```
-periogt-platform/
+periogt-demo/
   apps/
-    web/                        # Next.js 16 App Router UI (Vercel)
+    web/                        # Next.js 16 App Router UI (Bun workspace)
       app/
         api/
-          predict/route.ts      # BFF -> Modal (server-side fetch)
-          properties/route.ts
+          predict/route.ts      # BFF -> Modal via modalFetch()
           batch/route.ts
-        (pages)/                # Route groups
-          page.tsx              # single prediction
-          batch/page.tsx
-          about/page.tsx
+          embeddings/route.ts
+          properties/route.ts
+          health/route.ts
+        page.tsx                # Single prediction (home) — react-hook-form + zodResolver
+        batch/
+          page.tsx              # Batch prediction (CSV upload)
+          layout.tsx            # Metadata export (page is a client component)
+          loading.tsx           # Spinner loading state
+        about/page.tsx          # Static info page (server component, exports metadata)
+        layout.tsx
+        error.tsx
+        loading.tsx             # Spinner loading state
+        not-found.tsx           # Custom 404 page
       components/
         smiles-input.tsx
         prediction-result.tsx
-        batch-uploader.tsx
-        ui/                     # shadcn/ui generated components (lowercase files)
+        batch-uploader.tsx      # Keyboard-accessible drop zone
+        batch-results-table.tsx
+        embedding-viewer.tsx
+        property-selector.tsx
+        site-header.tsx
+        ui/                     # shadcn/ui generated components (incl. form, checkbox)
+      hooks/
+        use-properties.ts       # Shared hook for fetching property list
       lib/
         api.ts                  # typed fetch wrappers (no axios)
-        env.ts                  # env parsing (zod)
-        schemas.ts              # shared zod schemas
-      styles/
+        modal-proxy.ts          # modalFetch(), proxyResponse(), handleProxyError()
+        env.ts                  # lazy env parsing (zod/v4)
+        schemas.ts              # shared zod schemas + predictFormSchema for RHF
+        constants.ts            # property metadata, example SMILES
+        utils.ts                # cn() utility
       package.json
-      pnpm-lock.yaml
       next.config.ts
-      tailwind.config.ts
+      eslint.config.mjs         # ESLint flat config (core-web-vitals + typescript + prettier)
+      postcss.config.mjs        # Tailwind v4 (no tailwind.config.ts)
       components.json
   services/
     modal-api/
-      periogt_modal_app.py      # Modal app entry
-      periogt_runtime/          # thin wrapper around PerioGT repo code
+      periogt_modal_app.py      # Modal app entry + FastAPI
+      periogt_runtime/          # inference, preprocessing, schemas, model_loader, checkpoint_manager
+      periogt_src/              # vendored PerioGT source code
       requirements.txt
-      README.md                 # operator notes
   scripts/
     smoke_test.sh
+  package.json                  # Bun monorepo root
+  bun.lock
 ```
 
 ### A.2 Why not “backend inside Next.js”
@@ -522,177 +582,93 @@ PerioGT requires GPU + heavy scientific deps. Keeping inference on Modal avoids:
 
 ### B.1 Environment parsing (server-only secrets)
 
-Create a single source-of-truth env parser so missing secrets fail fast.
+Create a single source-of-truth env parser. Uses **lazy evaluation** so `next build` works without env vars — validation happens on first server request, not at import time.
 
 `apps/web/lib/env.ts`
 ```ts
-import { z } from "zod";
+import { z } from "zod/v4";
 
-/**
- * Server-only environment variables (do NOT expose to browser).
- * Throw at import time if invalid to fail deployments early.
- */
 const serverEnvSchema = z.object({
-  MODAL_PERIOGT_URL: z.string().url(),
+  MODAL_PERIOGT_URL: z.url(),
   MODAL_KEY: z.string().min(1),
   MODAL_SECRET: z.string().min(1),
 });
 
-export const serverEnv = serverEnvSchema.parse({
-  MODAL_PERIOGT_URL: process.env.MODAL_PERIOGT_URL,
-  MODAL_KEY: process.env.MODAL_KEY,
-  MODAL_SECRET: process.env.MODAL_SECRET,
-});
+type ServerEnv = z.infer<typeof serverEnvSchema>;
+let _cached: ServerEnv | null = null;
+
+export function getServerEnv(): ServerEnv {
+  if (_cached) return _cached;
+  const result = serverEnvSchema.safeParse({
+    MODAL_PERIOGT_URL: process.env.MODAL_PERIOGT_URL,
+    MODAL_KEY: process.env.MODAL_KEY,
+    MODAL_SECRET: process.env.MODAL_SECRET,
+  });
+  if (!result.success) {
+    throw new Error("Server environment validation failed. Check .env.local");
+  }
+  _cached = result.data;
+  return _cached;
+}
 ```
 
 ### B.2 Shared schemas
 
-`apps/web/lib/schemas.ts`
-```ts
-import { z } from "zod";
+`apps/web/lib/schemas.ts` — Uses `zod/v4` import. The SMILES schema applies `.transform(trim).pipe(...)` for whitespace handling. Full schemas cover predict, embedding, batch, properties, health requests and responses, plus error types. TypeScript types are inferred via `z.infer<>`.
 
-/** Keep conservative bounds; update only if chemist workflows require more. */
+Key pattern:
+```ts
+import { z } from "zod/v4";
+
 export const smilesSchema = z
   .string()
-  .min(1)
-  .max(2000)
-  .refine((s) => s.includes("*"), "SMILES must include polymer connection points using '*'");
-
-export const propertyIdSchema = z.string().min(1).max(64);
-
-export const predictRequestSchema = z.object({
-  smiles: smilesSchema,
-  property: propertyIdSchema,
-  return_embedding: z.boolean().optional().default(false),
-});
-
-export type PredictRequest = z.infer<typeof predictRequestSchema>;
-
-export const predictResponseSchema = z.object({
-  smiles: z.string(),
-  property: z.string(),
-  prediction: z.object({
-    value: z.number(),
-    units: z.string(),
-  }),
-  model: z.object({
-    name: z.string(),
-    checkpoint: z.string(),
-  }),
-  request_id: z.string(),
-});
-
-export type PredictResponse = z.infer<typeof predictResponseSchema>;
+  .transform((s) => s.trim())
+  .pipe(
+    z.string()
+      .min(1, "SMILES is required")
+      .max(2000, "SMILES too long (max 2000 characters)")
+      .refine((s) => s.includes("*"), {
+        message: "Polymer SMILES must include '*' connection points",
+      }),
+  );
 ```
 
 ### B.3 Server-side proxy route handler (BFF)
 
-`apps/web/app/api/predict/route.ts`
+Route handlers use the shared `modalFetch()`, `proxyResponse()`, and `handleProxyError()` helpers from `lib/modal-proxy.ts` instead of inline fetch logic. Pattern:
+
 ```ts
 import { NextResponse } from "next/server";
-import { serverEnv } from "@/lib/env";
-import { predictRequestSchema, predictResponseSchema } from "@/lib/schemas";
+import { predictRequestSchema } from "@/lib/schemas";
+import { modalFetch, proxyResponse, handleProxyError } from "@/lib/modal-proxy";
 
-/**
- * POST /api/predict
- * Validates input with zod, forwards request to Modal using server-only auth headers,
- * normalizes error formats, and validates response shape.
- */
 export async function POST(req: Request): Promise<Response> {
   const requestId = crypto.randomUUID();
-
-  let bodyJson: unknown;
-  try {
-    bodyJson = await req.json();
-  } catch {
-    return NextResponse.json(
-      { error: { code: "INVALID_JSON", message: "Request body must be valid JSON." }, request_id: requestId },
-      { status: 400 },
-    );
-  }
-
-  const parsed = predictRequestSchema.safeParse(bodyJson);
-  if (!parsed.success) {
-    return NextResponse.json(
-      {
-        error: { code: "VALIDATION_ERROR", message: "Invalid request body.", details: parsed.error.flatten() },
-        request_id: requestId,
-      },
-      { status: 400 },
-    );
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
+  const body = await req.json();
+  const parsed = predictRequestSchema.safeParse(body);
+  if (!parsed.success) { /* return 400 */ }
 
   try {
-    const upstream = await fetch(`${serverEnv.MODAL_PERIOGT_URL}/v1/predict`, {
+    const res = await modalFetch("/v1/predict", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Modal-Key": serverEnv.MODAL_KEY,
-        "Modal-Secret": serverEnv.MODAL_SECRET,
-      },
       body: JSON.stringify(parsed.data),
-      cache: "no-store",
-      signal: controller.signal,
+      headers: { "x-request-id": requestId },
     });
-
-    const upstreamText = await upstream.text();
-    const upstreamJson = upstreamText ? (JSON.parse(upstreamText) as unknown) : undefined;
-
-    if (!upstream.ok) {
-      return NextResponse.json(
-        {
-          error: {
-            code: "UPSTREAM_ERROR",
-            message: "Inference service returned an error.",
-            details: upstreamJson ?? upstreamText,
-          },
-          request_id: requestId,
-        },
-        { status: upstream.status },
-      );
-    }
-
-    const validated = predictResponseSchema.safeParse(upstreamJson);
-    if (!validated.success) {
-      return NextResponse.json(
-        {
-          error: {
-            code: "BAD_UPSTREAM_SHAPE",
-            message: "Inference service returned an unexpected response shape.",
-            details: validated.error.flatten(),
-          },
-          request_id: requestId,
-        },
-        { status: 502 },
-      );
-    }
-
-    // Attach our request_id for frontend correlation (keep upstream request_id too).
-    return NextResponse.json({ ...validated.data, request_id: requestId }, { status: 200 });
-  } catch (err: unknown) {
-    const message =
-      err instanceof DOMException && err.name === "AbortError"
-        ? "Inference request timed out."
-        : err instanceof Error
-          ? err.message
-          : "Unknown error.";
-
-    return NextResponse.json(
-      { error: { code: "NETWORK_ERROR", message }, request_id: requestId },
-      { status: 502 },
-    );
-  } finally {
-    clearTimeout(timeout);
+    return proxyResponse(res, requestId);
+  } catch (error) {
+    return handleProxyError(error, "predict", requestId);
   }
 }
 ```
 
 ### B.4 UI form pattern (react-hook-form + shadcn/ui)
 
-Use shadcn/ui’s `Form` primitives and RHF for validated submission.
+The predict page uses react-hook-form with `zodResolver` and shadcn's `Form`/`FormField`/`FormMessage` components for client-side Zod validation with inline error messages. Key pattern:
+
+- `predictFormSchema` (no `.default()`) is used with `zodResolver` to avoid type mismatch between Zod input/output types and RHF generics. `predictRequestSchema` (with `.default(false)` on `return_embedding`) remains the API validation schema.
+- `SmilesInput` and `PropertySelector` accept `value`/`onChange` props compatible with RHF's `field` object.
+- `form.formState.isSubmitting` replaces manual loading state.
+- Properties are loaded via the shared `useProperties()` hook; the default property is set via `form.setValue()` once available.
 
 ---
 
@@ -700,7 +676,8 @@ Use shadcn/ui’s `Form` primitives and RHF for validated submission.
 
 1. ✅ Confirm Zenodo download URLs and MD5 match what you expect before deploying.
 2. ✅ Ensure the Modal Volume is mounted and writable.
-3. ✅ Ensure GPU type selection matches your latency/cost goals (L4 is usually a good default).
-4. ✅ Run `scripts/smoke_test.sh` against the deployed endpoint before enabling the UI.
-5. ✅ Set `requires_proxy_auth=True` so the endpoint cannot be used without auth headers.
+3. ✅ Place `label_stats.json` and `descriptor_scaler.pkl` on the Volume at `/vol/checkpoints/` for production-quality predictions.
+4. ✅ Ensure GPU type selection matches your latency/cost goals (L4 is the current default).
+5. ✅ Run `scripts/smoke_test.sh` against the deployed endpoint before enabling the UI.
+6. ✅ Set `requires_proxy_auth=True` on `@modal.asgi_app` so the endpoint cannot be used without auth headers.
 

@@ -1,75 +1,71 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import { SmilesInput } from "@/components/smiles-input";
 import { PropertySelector } from "@/components/property-selector";
 import { PredictionResult } from "@/components/prediction-result";
+import { useProperties } from "@/hooks/use-properties";
 import { api, ApiError } from "@/lib/api";
-import type { PropertyInfo, PredictResponse } from "@/lib/schemas";
+import { predictFormSchema } from "@/lib/schemas";
+import type { PredictFormValues, PredictResponse } from "@/lib/schemas";
 
 export default function PredictPage() {
-  const [smiles, setSmiles] = useState("");
-  const [property, setProperty] = useState("");
-  const [returnEmbedding, setReturnEmbedding] = useState(false);
-  const [properties, setProperties] = useState<PropertyInfo[]>([]);
-  const [propertiesLoading, setPropertiesLoading] = useState(true);
-  const [loading, setLoading] = useState(false);
+  const {
+    properties,
+    loading: propertiesLoading,
+    error: propertiesError,
+  } = useProperties();
   const [result, setResult] = useState<PredictResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  const form = useForm<PredictFormValues>({
+    resolver: zodResolver(predictFormSchema),
+    defaultValues: {
+      smiles: "",
+      property: "",
+      return_embedding: false,
+    },
+    mode: "onTouched",
+  });
 
   useEffect(() => {
-    api
-      .properties()
-      .then((res) => {
-        setProperties(res.properties);
-        if (res.properties.length > 0) {
-          setProperty(res.properties[0].id);
-        }
-      })
-      .catch((err) => {
-        console.error("Failed to load properties:", err);
-        setError("Failed to load available properties from the backend.");
-      })
-      .finally(() => setPropertiesLoading(false));
-  }, []);
+    if (properties.length > 0 && !form.getValues("property")) {
+      form.setValue("property", properties[0].id, { shouldValidate: true });
+    }
+  }, [properties, form]);
 
-  const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      setError(null);
-      setResult(null);
-      setLoading(true);
+  async function onSubmit(data: PredictFormValues) {
+    setApiError(null);
+    setResult(null);
 
-      try {
-        const res = await api.predict({
-          smiles: smiles.trim(),
-          property,
-          return_embedding: returnEmbedding,
-        });
-        setResult(res);
-      } catch (err) {
-        if (err instanceof ApiError) {
-          setError(err.detail.message);
-        } else {
-          setError("An unexpected error occurred.");
-        }
-      } finally {
-        setLoading(false);
+    try {
+      const res = await api.predict(data);
+      setResult(res);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setApiError(err.detail.message);
+      } else {
+        setApiError("An unexpected error occurred.");
       }
-    },
-    [smiles, property, returnEmbedding],
-  );
+    }
+  }
 
-  const canSubmit = smiles.trim().length > 0 && property.length > 0 && !loading;
+  const isSubmitting = form.formState.isSubmitting;
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Property Prediction</h1>
+        <h1 className="text-2xl font-bold tracking-tight">
+          Property Prediction
+        </h1>
         <p className="text-muted-foreground">
           Predict a polymer property from its repeat-unit SMILES using PerioGT.
         </p>
@@ -80,42 +76,73 @@ export default function PredictPage() {
           <CardTitle>Input</CardTitle>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <SmilesInput
-              value={smiles}
-              onChange={setSmiles}
-              disabled={loading}
-            />
-            <PropertySelector
-              properties={properties}
-              value={property}
-              onChange={setProperty}
-              disabled={loading}
-              loading={propertiesLoading}
-            />
-            <div className="flex items-center gap-2">
-              <input
-                id="return-embedding"
-                type="checkbox"
-                checked={returnEmbedding}
-                onChange={(e) => setReturnEmbedding(e.target.checked)}
-                disabled={loading}
-                className="rounded border-input"
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              <FormField
+                control={form.control}
+                name="smiles"
+                render={({ field, fieldState }) => (
+                  <FormItem>
+                    <SmilesInput
+                      value={field.value}
+                      onChange={field.onChange}
+                      onBlur={field.onBlur}
+                      error={fieldState.error?.message}
+                      disabled={isSubmitting}
+                    />
+                  </FormItem>
+                )}
               />
-              <Label htmlFor="return-embedding" className="text-sm font-normal">
-                Also return graph embedding vector
-              </Label>
-            </div>
-            <Button type="submit" disabled={!canSubmit}>
-              {loading ? "Predicting..." : "Predict"}
-            </Button>
-          </form>
+              <FormField
+                control={form.control}
+                name="property"
+                render={({ field }) => (
+                  <FormItem>
+                    <PropertySelector
+                      properties={properties}
+                      value={field.value}
+                      onChange={field.onChange}
+                      disabled={isSubmitting}
+                      loading={propertiesLoading}
+                    />
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="return_embedding"
+                render={({ field }) => (
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="return-embedding"
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                      disabled={isSubmitting}
+                    />
+                    <Label
+                      htmlFor="return-embedding"
+                      className="text-sm font-normal"
+                    >
+                      Also return graph embedding vector
+                    </Label>
+                  </div>
+                )}
+              />
+              <Button
+                type="submit"
+                disabled={isSubmitting || propertiesLoading}
+              >
+                {isSubmitting ? "Predicting..." : "Predict"}
+              </Button>
+            </form>
+          </Form>
         </CardContent>
       </Card>
 
-      {error && (
+      {(apiError || propertiesError) && (
         <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{apiError || propertiesError}</AlertDescription>
         </Alert>
       )}
 
