@@ -1,0 +1,13 @@
+{
+  "name": "periogt-demo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "bun run --filter web dev",
+    "build": "bun run --filter web build",
+    "lint": "bun run --filter web lint"
+  }
+}

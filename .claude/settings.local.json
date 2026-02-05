@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "WebFetch(domain:zenodo.org)",
+      "WebSearch",
+      "WebFetch(domain:modal.com)",
+      "Bash(git -C \"C:\\\\Users\\\\aritr\\\\Desktop\\\\GitHub Projects\\\\periogt-demo\" log --oneline --all)",
+      "WebFetch(domain:pytorch-geometric.readthedocs.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:ui.shadcn.com)",
+      "Bash(where:*)",
+      "Bash(pnpm --version:*)",
+      "Bash(node --version:*)",
+      "Bash(bun --version:*)",
+      "Bash(del \"C:\\\\Users\\\\aritr\\\\Desktop\\\\GitHub Projects\\\\periogt-demo\\\\pnpm-workspace.yaml\")",
+      "Bash(bunx create-next-app@latest:*)",
+      "Bash(bun install:*)",
+      "Bash(bunx shadcn@latest init:*)",
+      "Bash(bun add:*)",
+      "Bash(bun upgrade:*)",
+      "Bash(npm install:*)",
+      "Bash(curl:*)",
+      "Bash(unzip:*)",
+      "Bash(test:*)",
+      "Bash(bun run next:*)",
+      "Bash(npx next:*)",
+      "Bash(bunx shadcn@latest add:*)",
+      "Bash(python -c:*)",
+      "Bash(npx tsc:*)"
+    ]
+  }
+}
