@@ -2,6 +2,9 @@
 
 Serves polymer property prediction and graph embedding endpoints
 via FastAPI on Modal GPU infrastructure.
+
+Local source paths are resolved relative to this file to avoid
+working-directory dependent deployments.
 """
 
 from __future__ import annotations
@@ -13,6 +16,8 @@ import time
 import uuid
 
 import modal
+
+from local_paths import PERIOGT_RUNTIME_DIR, PERIOGT_SRC_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +49,8 @@ image = (
     # API deps
     .pip_install("fastapi[standard]", "pydantic>=2.8,<3")
     # Vendor PerioGT source and runtime into the image
-    .add_local_dir("periogt_src", remote_path="/root/periogt_src")
-    .add_local_dir("periogt_runtime", remote_path="/root/periogt_runtime")
+    .add_local_dir(PERIOGT_SRC_DIR, remote_path="/root/periogt_src")
+    .add_local_dir(PERIOGT_RUNTIME_DIR, remote_path="/root/periogt_runtime")
 )
 
 volume = modal.Volume.from_name("periogt-checkpoints", create_if_missing=True)
@@ -139,7 +144,7 @@ def _ensure_ready() -> None:
     image=image,
     gpu="L4",
     volumes={VOLUME_ROOT: volume},
-    keep_warm=1,
+    min_containers=1,
     timeout=300,
 )
 @modal.concurrent(max_inputs=4)
