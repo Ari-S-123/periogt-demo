@@ -12,14 +12,27 @@ from __future__ import annotations
 import json
 import logging
 import os
+import posixpath
 import time
 import uuid
+from pathlib import Path
 
 import modal
 
-from local_paths import PERIOGT_RUNTIME_DIR, PERIOGT_SRC_DIR
-
 logger = logging.getLogger(__name__)
+
+
+def _resolve_sibling_dir(name: str) -> Path:
+    path = (Path(__file__).resolve().parent / name).resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"Local directory not found: {path}")
+    if not path.is_dir():
+        raise NotADirectoryError(f"Expected directory at: {path}")
+    return path
+
+
+PERIOGT_SRC_DIR = _resolve_sibling_dir("periogt_src")
+PERIOGT_RUNTIME_DIR = _resolve_sibling_dir("periogt_runtime")
 
 # ---------------------------------------------------------------------------
 # Modal app + image
@@ -55,11 +68,40 @@ image = (
 
 volume = modal.Volume.from_name("periogt-checkpoints", create_if_missing=True)
 
-from periogt_runtime.runtime_config import add_src_dir_to_syspath, get_checkpoint_dir
+from periogt_runtime.runtime_config import (
+    DEFAULT_CHECKPOINT_DIR,
+    add_src_dir_to_syspath,
+)
 
-VOLUME_ROOT = str(get_checkpoint_dir())
-LABEL_STATS_PATH = os.path.join(VOLUME_ROOT, "label_stats.json")
-SCALER_PATH = os.path.join(VOLUME_ROOT, "descriptor_scaler.pkl")
+
+def _canonical_modal_mount_path(raw_path: str) -> str:
+    """
+    Return a canonical absolute POSIX path for Modal Volume mounts.
+
+    Modal validates mount points as canonical Unix-style absolute paths.
+    On Windows hosts, values like "/vol/checkpoints" can be rewritten to
+    "C:/vol/checkpoints" when resolved via pathlib, which Modal rejects.
+    """
+    path = raw_path.replace("\\", "/").strip()
+    if not path:
+        path = DEFAULT_CHECKPOINT_DIR
+
+    # Convert Windows drive paths (e.g. C:/vol/checkpoints) to POSIX.
+    if len(path) >= 2 and path[1] == ":":
+        path = path[2:]
+
+    path = "/" + path.lstrip("/")
+    while "//" in path:
+        path = path.replace("//", "/")
+
+    return path.rstrip("/") or "/"
+
+
+VOLUME_ROOT = _canonical_modal_mount_path(
+    os.environ.get("PERIOGT_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR)
+)
+LABEL_STATS_PATH = posixpath.join(VOLUME_ROOT, "label_stats.json")
+SCALER_PATH = posixpath.join(VOLUME_ROOT, "descriptor_scaler.pkl")
 
 # ---------------------------------------------------------------------------
 # Container-level state (populated on first request)
@@ -143,6 +185,7 @@ def _ensure_ready() -> None:
 @app.function(
     image=image,
     gpu="L4",
+    env={"PERIOGT_CHECKPOINT_DIR": VOLUME_ROOT},
     volumes={VOLUME_ROOT: volume},
     min_containers=1,
     timeout=300,

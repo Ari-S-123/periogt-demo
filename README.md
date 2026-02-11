@@ -1,68 +1,126 @@
 # PerioGT Demo
 
-Web prototype that lets chemists submit polymer repeat-unit SMILES and receive property predictions and graph embeddings using the PerioGT graph transformer model.
+PerioGT Demo is a polymer-property prediction system with one shared inference runtime and two deployment surfaces:
+
+1. Modal-hosted FastAPI for web/API usage.
+2. HPC-oriented CLI/server packaging for Slurm + Apptainer (primary) and Slurm + Conda (fallback).
 
 ## Architecture
 
 ```
-Browser -> Next.js Route Handler (/api/*) -> Modal FastAPI (/v1/*) -> PerioGT GPU inference
+Web path:
+Browser -> Next.js Route Handlers (/api/*) -> Modal FastAPI (/v1/*) -> PerioGT inference
+
+HPC path:
+Slurm job -> Apptainer/Conda -> periogt_hpc (CLI or optional server) -> periogt_runtime -> PerioGT inference
 ```
 
-- **Frontend:** Next.js 16 App Router, React 19, shadcn/ui, Tailwind v4, react-hook-form + Zod v4
-- **Backend:** Modal GPU service, FastAPI, PyTorch 2.6 + DGL, RDKit, Mordred
-- **Weights:** Downloaded from Zenodo at runtime into a persistent Modal Volume
+- Frontend: Next.js 16 App Router, React 19, TypeScript, shadcn/ui, Tailwind v4.
+- Shared runtime: `services/modal-api/periogt_runtime` (checkpoint management, model loading, inference, schemas).
+- Modal backend: `services/modal-api/periogt_modal_app.py`.
+- HPC backend: `services/hpc/periogt_hpc` with `predict`, `embeddings`, `batch`, `doctor`, `setup`.
 
-The browser never talks directly to the GPU backend. Route handlers in `/api/*` validate requests with Zod, inject Modal auth headers, and proxy to the backend.
-
-## Quick Start
+## Quick Start (Web + Modal)
 
 ```bash
-# Install dependencies
+# 1) Install frontend workspace deps
 bun install
 
-# Set up environment (copy and fill in values)
+# 2) Configure web env
 cp apps/web/.env.example apps/web/.env.local
 
-# Start dev server
+# 3) Start frontend
 bun dev
+
+# 4) Run backend in Modal dev mode (separate terminal)
+modal serve services/modal-api/periogt_modal_app.py
 ```
 
-## Commands
+## Quick Start (HPC CLI)
 
 ```bash
-# Frontend
-bun dev              # Dev server (Turbopack)
-bun build            # Production build
-bun lint             # ESLint + Prettier check
-bun format           # Format with Prettier
+# Install fallback conda environment (if not using Apptainer)
+bash services/hpc/conda/install.sh periogt
+conda activate periogt
 
-# Backend
-modal serve services/modal-api/periogt_modal_app.py    # Local dev
-modal deploy services/modal-api/periogt_modal_app.py   # Deploy
+# Verify runtime and cluster compatibility
+python -m periogt_hpc doctor
 
-# Smoke tests
-bash scripts/smoke_test.sh <MODAL_BASE_URL>
+# Prepare/check artifacts and index.json
+python -m periogt_hpc setup --skip-download
+
+# Single prediction
+python -m periogt_hpc predict --smiles "*CC*" --property tg --format json
 ```
 
-## Repository Structure
+## Key Commands
 
-```
-periogt-demo/
-  apps/web/           Next.js 16 frontend (Bun workspace)
-  services/modal-api/ Modal GPU backend (standalone Python)
-  scripts/            Smoke tests
+```bash
+# Frontend workspace
+bun dev
+bun build
+bun lint
+bun format
+
+# Modal backend
+modal serve services/modal-api/periogt_modal_app.py
+modal deploy services/modal-api/periogt_modal_app.py
+
+# Python tests
+python -m unittest services/modal-api/test_local_paths.py
+pytest services/modal-api/tests
+pytest services/hpc/tests
+
+# API smoke tests (Modal or HPC server mode)
+bash scripts/smoke_test.sh <BASE_URL>
+pwsh scripts/smoke_test.ps1 <BASE_URL>
+
+# HPC CLI smoke tests
+bash scripts/hpc_cli_smoke_test.sh <PERIOGT_CHECKPOINT_DIR>
+pwsh scripts/hpc_cli_smoke_test.ps1 <PERIOGT_CHECKPOINT_DIR>
 ```
 
 ## Environment Variables
 
-Stored in `apps/web/.env.local` (git-ignored):
+Web server env (`apps/web/.env.local`):
 
-```
+```dotenv
 MODAL_PERIOGT_URL=https://your-workspace--periogt-api-periogt-api.modal.run
 MODAL_KEY=your-modal-key
 MODAL_SECRET=your-modal-secret
 ```
 
+HPC runtime env (set directly or via `services/hpc/slurm/setup_env.sh`):
+
+- `DGLBACKEND=pytorch` (required by DGL)
+- `PERIOGT_BASE_DIR`
+- `PERIOGT_CHECKPOINT_DIR`
+- `PERIOGT_RESULTS_DIR`
+- `PERIOGT_SRC_DIR`
+- `PERIOGT_DEVICE` (`auto`, `cpu`, `cuda`)
+- `PERIOGT_RUNTIME_PACKAGE_DIR`
+- `PERIOGT_API_KEY` (optional, server mode auth)
+
+## HPC Operational Notes
+
+- Minimum NVIDIA driver for CUDA 12.6 is `560.28`.
+- Use explicit Apptainer bind mounts (`--bind`) for checkpoint/results paths.
+- Explorer `/scratch` is purgeable; keep checkpoints on persistent storage (`/projects`).
+- DGL is an inherited upstream dependency risk (maintenance is limited); keep PyTorch/DGL pins aligned with the current runtime.
+
+Implementation details and rationale for the HPC surface are captured in `periogt-hpc-backend-feature-spec-reviewed.md`.
+
+## Repository Structure
+
+```text
+periogt-demo/
+  apps/web/                     Next.js frontend + BFF routes
+  services/modal-api/           Modal FastAPI service + shared runtime
+  services/hpc/                 HPC CLI/server package + Slurm/Apptainer/Conda assets
+  scripts/                      Shell and PowerShell smoke tests
+  periogt-hpc-backend-feature-spec-reviewed.md
+```
+
 ## License
 
-Model artifacts available from [Zenodo](https://zenodo.org/records/17035498) under CC-BY 4.0.
+Model artifacts are sourced from Zenodo: https://zenodo.org/records/17035498 (CC-BY 4.0).

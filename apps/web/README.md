@@ -1,40 +1,57 @@
 # PerioGT Web Frontend
 
-Next.js 16 App Router frontend for the PerioGT polymer property prediction demo.
+Next.js 16 App Router frontend and backend-for-frontend (BFF) proxy for PerioGT inference.
 
 ## Stack
 
-- Next.js 16.1.6 (App Router, Turbopack)
-- React 19, TypeScript 5
-- shadcn/ui (Radix UI + Tailwind v4)
-- react-hook-form + Zod v4 for form validation
-- PapaParse for CSV parsing
+- Next.js `16.1.6` (App Router + Turbopack)
+- React `19.2.3`, TypeScript `5`
+- shadcn/ui primitives + Tailwind CSS v4
+- `react-hook-form` + `zod/v4` for validation
+- PapaParse for CSV batch input handling
 
-## Pages
+## App Routes
 
-| Route | Description |
-|-------|-------------|
-| `/` | Single property prediction (react-hook-form + inline Zod validation) |
-| `/batch` | CSV upload for batch prediction |
-| `/about` | Model info, supported properties, citation |
+| Route    | Description                                                       |
+| -------- | ----------------------------------------------------------------- |
+| `/`      | Single prediction form (`smiles`, `property`, optional embedding) |
+| `/batch` | Batch prediction workflow from CSV                                |
+| `/about` | Model description and property metadata                           |
 
-## API Routes
+## API Routes (BFF)
 
-All routes proxy to the Modal backend via `lib/modal-proxy.ts`:
+All route handlers are `dynamic = "force-dynamic"` and proxy to Modal via `lib/modal-proxy.ts`.
+Each handler generates a request id, validates request payloads with Zod, and forwards `x-request-id` downstream.
 
-| Route | Modal Endpoint | Method |
-|-------|---------------|--------|
-| `/api/predict` | `/v1/predict` | POST |
-| `/api/batch` | `/v1/predict/batch` | POST |
-| `/api/embeddings` | `/v1/embeddings` | POST |
-| `/api/properties` | `/v1/properties` | GET |
-| `/api/health` | `/v1/health` | GET |
+| Route             | Method | Validation                                  | Upstream            |
+| ----------------- | ------ | ------------------------------------------- | ------------------- |
+| `/api/predict`    | POST   | `predictRequestSchema`                      | `/v1/predict`       |
+| `/api/batch`      | POST   | `batchPredictRequestSchema` (max 100 items) | `/v1/predict/batch` |
+| `/api/embeddings` | POST   | `embeddingRequestSchema`                    | `/v1/embeddings`    |
+| `/api/properties` | GET    | None                                        | `/v1/properties`    |
+| `/api/health`     | GET    | None                                        | `/v1/health`        |
+
+Proxy error behavior:
+
+- Timeout returns HTTP `504` (`timeout` error code).
+- Backend/network failures return HTTP `502` (`proxy_error` or `backend_error`).
+
+## Required Environment
+
+Defined in `apps/web/lib/env.ts` and loaded server-side:
+
+```dotenv
+MODAL_PERIOGT_URL=...
+MODAL_KEY=...
+MODAL_SECRET=...
+```
 
 ## Development
 
 ```bash
-bun dev       # Start dev server
-bun build     # Production build
-bun lint      # ESLint + Prettier check
-bun format    # Format with Prettier
+# from repo root
+bun dev
+bun build
+bun lint
+bun format
 ```
