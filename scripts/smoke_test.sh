@@ -5,6 +5,7 @@
 #
 # Requires: curl, jq
 # For Modal proxy auth, set MODAL_KEY and MODAL_SECRET env vars.
+# For HPC server mode auth, set PERIOGT_API_KEY env var.
 
 set -euo pipefail
 
@@ -13,6 +14,10 @@ AUTH_HEADERS=""
 
 if [[ -n "${MODAL_KEY:-}" && -n "${MODAL_SECRET:-}" ]]; then
   AUTH_HEADERS="-H 'Modal-Key: ${MODAL_KEY}' -H 'Modal-Secret: ${MODAL_SECRET}'"
+fi
+
+if [[ -n "${PERIOGT_API_KEY:-}" ]]; then
+  AUTH_HEADERS="$AUTH_HEADERS -H 'X-Api-Key: ${PERIOGT_API_KEY}'"
 fi
 
 pass=0

@@ -7,15 +7,16 @@ DGL graph objects ready for model consumption.
 from __future__ import annotations
 
 import logging
-import sys
 
 import numpy as np
 import torch
 
+from .runtime_config import add_src_dir_to_syspath
+
 logger = logging.getLogger(__name__)
 
 # Add vendored PerioGT source to path
-sys.path.insert(0, "/root/periogt_src/source_code/PerioGT_common")
+add_src_dir_to_syspath()
 
 
 def validate_smiles(smiles: str) -> tuple[bool, str]:

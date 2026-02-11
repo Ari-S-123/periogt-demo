@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import logging
-import sys
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 import torch
 
+from .runtime_config import (
+    add_src_dir_to_syspath,
+    get_model_config_path,
+    resolve_torch_device,
+)
+
 logger = logging.getLogger(__name__)
 
 # Add vendored PerioGT source to path
-sys.path.insert(0, "/root/periogt_src/source_code/PerioGT_common")
+add_src_dir_to_syspath()
 
 
 @dataclass
@@ -53,10 +58,10 @@ def load_pretrained_model(pretrained_ckpt_path: str, device: str = "cuda") -> to
     args = _make_args(model_path=pretrained_ckpt_path, device=device)
 
     # Load config from the vendored config.yaml
-    config = load_config(args, file_path="/root/periogt_src/source_code/PerioGT_common/config.yaml")
+    config = load_config(args, file_path=str(get_model_config_path()))
 
     vocab = Vocab()
-    dev = torch.device(device if torch.cuda.is_available() else "cpu")
+    dev = resolve_torch_device(device)
 
     model = LiGhTPredictor(
         d_node_feats=config["d_node_feats"],
@@ -126,7 +131,7 @@ def load_all_models(property_index: dict, pretrained_dir: str,
     import glob
     import os
 
-    dev = torch.device(device if torch.cuda.is_available() else "cpu")
+    dev = resolve_torch_device(device)
     loaded = LoadedModels(property_index=property_index, device=dev)
 
     # Find pretrained checkpoint

@@ -55,7 +55,9 @@ image = (
 
 volume = modal.Volume.from_name("periogt-checkpoints", create_if_missing=True)
 
-VOLUME_ROOT = "/vol/checkpoints"
+from periogt_runtime.runtime_config import add_src_dir_to_syspath, get_checkpoint_dir
+
+VOLUME_ROOT = str(get_checkpoint_dir())
 LABEL_STATS_PATH = os.path.join(VOLUME_ROOT, "label_stats.json")
 SCALER_PATH = os.path.join(VOLUME_ROOT, "descriptor_scaler.pkl")
 
@@ -79,12 +81,10 @@ def _ensure_ready() -> None:
         return
 
     import pickle
-    import sys
-
     import torch
 
     # Ensure vendored PerioGT source is importable
-    sys.path.insert(0, "/root/periogt_src/source_code/PerioGT_common")
+    add_src_dir_to_syspath()
 
     from periogt_runtime.checkpoint_manager import ensure_checkpoints
     from periogt_runtime.model_loader import load_all_models

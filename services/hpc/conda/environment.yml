@@ -1,0 +1,19 @@
+name: periogt
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy<2
+  - scipy
+  - scikit-learn
+  - pandas
+  - networkx
+  - pyyaml
+  - rdkit
+  - click
+  - pip
+  - fastapi
+  - uvicorn
+  - pydantic>=2.8,<3
+
