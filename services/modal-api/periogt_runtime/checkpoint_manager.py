@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from urllib.request import urlretrieve
@@ -71,6 +72,21 @@ def _compute_md5(filepath: str | Path) -> str:
         for chunk in iter(lambda: f.read(8192), b""):
             md5.update(chunk)
     return md5.hexdigest()
+
+
+def _parse_positive_float_env(name: str, default: float, minimum: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using default %.2f", name, raw, default)
+        return default
+    if value < minimum:
+        logger.warning("%s=%r is too small; using minimum %.2f", name, raw, minimum)
+        return minimum
+    return value
 
 
 def _download_and_verify(name: str, info: dict[str, str], root: Path) -> Path:
@@ -238,10 +254,33 @@ def ensure_checkpoints(volume=None, checkpoint_dir: str | Path | None = None, sk
 
     # Check if another container is already downloading
     if downloading_marker.exists():
-        raise RuntimeError(
-            "Another container is currently downloading checkpoints. "
-            "This process will retry later."
+        stale_after_s = _parse_positive_float_env(
+            "PERIOGT_CHECKPOINT_DOWNLOAD_STALE_SECONDS",
+            330.0,
+            minimum=1.0,
         )
+        try:
+            marker_age_s = max(0.0, time.time() - downloading_marker.stat().st_mtime)
+        except FileNotFoundError:
+            marker_age_s = 0.0
+
+        if marker_age_s >= stale_after_s:
+            logger.warning(
+                "Detected stale checkpoint download marker at %s (age %.1fs >= %.1fs); "
+                "taking over bootstrap in this container.",
+                downloading_marker,
+                marker_age_s,
+                stale_after_s,
+            )
+            downloading_marker.unlink(missing_ok=True)
+            if volume is not None:
+                volume.commit()
+                volume.reload()
+        else:
+            raise RuntimeError(
+                "Another container is currently downloading checkpoints. "
+                "This process will retry later."
+            )
 
     # Start download
     root.mkdir(parents=True, exist_ok=True)

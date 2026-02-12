@@ -97,50 +97,69 @@ run_test() {
   local json_body="${4:-}"
   local expect_status="${5:-200}"
   local max_time="${6:-$MAX_TIME}"
+  local retry_status="${7:-}"
+  local retry_delay="${8:-5}"
+  local retry_window="${9:-0}"
+  local started_at
+  started_at="$(date +%s)"
+  local attempt=0
 
   echo -n "  ${name} ... "
-
-  local url="${BASE_URL}${path}"
-  local -a curl_args=(
-    curl
-    "${auth_args[@]}"
-    "${url}"
-    -o "${body_file}"
-    -w '%{http_code}'
-    -sS
-    --connect-timeout "${CONNECT_TIMEOUT}"
-    --max-time "${max_time}"
-  )
-
-  if [[ "${method}" == "POST" ]]; then
-    curl_args=(
+  while true; do
+    ((attempt+=1))
+    local url="${BASE_URL}${path}"
+    local -a curl_args=(
       curl
       "${auth_args[@]}"
-      -X POST
       "${url}"
-      -H "Content-Type: application/json"
-      --data "${json_body}"
       -o "${body_file}"
       -w '%{http_code}'
       -sS
       --connect-timeout "${CONNECT_TIMEOUT}"
       --max-time "${max_time}"
     )
-  fi
 
-  local http_code
-  if ! http_code="$("${curl_args[@]}" 2>"${err_file}")"; then
-    echo "FAIL (request error)"
-    cat "${err_file}"
-    echo
-    ((fail+=1))
-    return
-  fi
+    if [[ "${method}" == "POST" ]]; then
+      curl_args=(
+        curl
+        "${auth_args[@]}"
+        -X POST
+        "${url}"
+        -H "Content-Type: application/json"
+        --data "${json_body}"
+        -o "${body_file}"
+        -w '%{http_code}'
+        -sS
+        --connect-timeout "${CONNECT_TIMEOUT}"
+        --max-time "${max_time}"
+      )
+    fi
 
-  if [[ "${http_code}" == "${expect_status}" ]]; then
-    echo "OK (${http_code})"
-    ((pass+=1))
-  else
+    local http_code
+    if ! http_code="$("${curl_args[@]}" 2>"${err_file}")"; then
+      echo "FAIL (request error)"
+      cat "${err_file}"
+      echo
+      ((fail+=1))
+      return
+    fi
+
+    if [[ "${http_code}" == "${expect_status}" ]]; then
+      echo "OK (${http_code})"
+      ((pass+=1))
+      return
+    fi
+
+    local now
+    now="$(date +%s)"
+    local elapsed="$(( now - started_at ))"
+    if [[ -n "${retry_status}" ]] && [[ "${http_code}" == "${retry_status}" ]] && [[ "${retry_window}" -gt 0 ]] && [[ "${elapsed}" -lt "${retry_window}" ]]; then
+      echo "RETRY (got ${http_code} on attempt ${attempt} after ${elapsed}s; retrying in ${retry_delay}s)"
+      sleep "${retry_delay}"
+      echo -n "  ${name} ... "
+      continue
+    fi
+
     echo "FAIL (expected ${expect_status}, got ${http_code})"
     cat "${body_file}" 2>/dev/null || true
     if [[ "${http_code}" == "401" ]] && grep -qi "proxy authorization" "${body_file}"; then
@@ -148,14 +167,15 @@ run_test() {
     fi
     echo
     ((fail+=1))
-  fi
+    return
+  done
 }
 
 echo "PerioGT Smoke Test - ${BASE_URL}"
 echo "================================"
 
 run_test "GET /v1/health" "GET" "/v1/health" "" "200" "${HEALTH_MAX_TIME}"
-run_test "GET /v1/properties" "GET" "/v1/properties"
+run_test "GET /v1/properties" "GET" "/v1/properties" "" "200" "${MAX_TIME}" "503" "5" "${MAX_TIME}"
 run_test "POST /v1/predict (valid)" "POST" "/v1/predict" '{"smiles":"*CC*","property":"tg"}'
 run_test "POST /v1/predict (invalid SMILES)" "POST" "/v1/predict" '{"smiles":"invalid","property":"tg"}' "422"
 run_test "POST /v1/embeddings" "POST" "/v1/embeddings" '{"smiles":"*CC*"}'

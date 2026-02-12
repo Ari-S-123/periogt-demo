@@ -144,8 +144,9 @@ HPC runtime env (set directly or via `services/hpc/slurm/setup_env.sh`):
 - `GET /v1/health` is intentionally non-blocking and should normally return quickly (typically under a few seconds).
 - Modal runtime startup now loads checkpoint metadata, scaler, and the pretrained backbone first; finetuned property heads load lazily on first use per property.
 - When multiple containers start at once, one container may bootstrap checkpoints while others wait; tune wait behavior with:
-  - `PERIOGT_CHECKPOINT_WAIT_TIMEOUT_SECONDS` (default `240`)
-  - `PERIOGT_CHECKPOINT_WAIT_POLL_SECONDS` (default `2`)
+  - `PERIOGT_CHECKPOINT_WAIT_TIMEOUT_SECONDS` (default `5`)
+  - `PERIOGT_CHECKPOINT_WAIT_POLL_SECONDS` (default `1`)
+  - `PERIOGT_CHECKPOINT_DOWNLOAD_STALE_SECONDS` (default `330`, stale `.downloading` lock recovery)
 - First request for a new property can still be slower due to finetuned checkpoint load. Subsequent requests for that property are warm.
 - A larger GPU primarily improves steady-state inference throughput/concurrency. It does not eliminate checkpoint download, Python import, or model deserialization overhead on cold start.
 - For this workload (single-item predictions with significant CPU-side preprocessing), cold-start and first-hit latency are usually improved more by warm containers/artifact locality than by switching to a bigger GPU tier.

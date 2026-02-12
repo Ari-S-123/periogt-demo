@@ -154,7 +154,13 @@ function Run-Test {
 
         [Nullable[int]]$ConnectionTimeoutSeconds = $configuredConnectionTimeoutSeconds,
 
-        [int]$OperationTimeoutSeconds = $defaultOperationTimeoutSeconds
+        [int]$OperationTimeoutSeconds = $defaultOperationTimeoutSeconds,
+
+        [int]$RetryStatusCode = 0,
+
+        [int]$RetryDelaySeconds = 5,
+
+        [int]$RetryWindowSeconds = 0
     )
 
     Write-Host -NoNewline "  $Name ... "
@@ -176,51 +182,75 @@ function Run-Test {
         $requestParams["Body"] = $JsonBody
     }
 
-    try {
-        $response = Invoke-WebRequest @requestParams
-        $statusCode = [int]$response.StatusCode
-    }
-    catch {
-        Write-Host "FAIL (request error)"
-        Write-Host $_.Exception.Message
+    $startedAt = Get-Date
+    $attempt = 0
+    while ($true) {
+        $attempt++
+
+        try {
+            $response = Invoke-WebRequest @requestParams
+            $statusCode = [int]$response.StatusCode
+        }
+        catch {
+            Write-Host "FAIL (request error)"
+            Write-Host $_.Exception.Message
+            Write-Host ""
+            $script:fail++
+            return
+        }
+
+        $responseText = $null
+        if (-not [string]::IsNullOrEmpty($response.Content)) {
+            if ($response.Content -is [byte[]]) {
+                $responseText = [System.Text.Encoding]::UTF8.GetString($response.Content)
+            }
+            else {
+                $responseText = [string]$response.Content
+            }
+        }
+
+        if ($statusCode -eq $ExpectedStatus) {
+            Write-Host "OK ($statusCode)"
+            $script:pass++
+            return
+        }
+
+        $elapsedSeconds = [int][Math]::Floor(((Get-Date) - $startedAt).TotalSeconds)
+        $shouldRetry = (
+            ($RetryStatusCode -gt 0) -and
+            ($statusCode -eq $RetryStatusCode) -and
+            ($RetryWindowSeconds -gt 0) -and
+            ($elapsedSeconds -lt $RetryWindowSeconds)
+        )
+        if ($shouldRetry) {
+            Write-Host "RETRY (got $statusCode on attempt $attempt after ${elapsedSeconds}s; retrying in ${RetryDelaySeconds}s)"
+            Start-Sleep -Seconds $RetryDelaySeconds
+            Write-Host -NoNewline "  $Name ... "
+            continue
+        }
+
+        Write-Host "FAIL (expected $ExpectedStatus, got $statusCode)"
+        if (-not [string]::IsNullOrWhiteSpace($responseText)) {
+            Write-Host $responseText
+        }
+        if (
+            ($statusCode -eq 401) -and
+            (-not [string]::IsNullOrWhiteSpace($responseText)) -and
+            ($responseText -match "proxy authorization")
+        ) {
+            Write-Host "[HINT] Modal proxy auth expects a workspace Proxy Auth Token in Modal-Key/Modal-Secret."
+        }
         Write-Host ""
         $script:fail++
         return
     }
-
-    if ($statusCode -eq $ExpectedStatus) {
-        Write-Host "OK ($statusCode)"
-        $script:pass++
-        return
-    }
-
-    Write-Host "FAIL (expected $ExpectedStatus, got $statusCode)"
-    $responseText = $null
-    if (-not [string]::IsNullOrEmpty($response.Content)) {
-        if ($response.Content -is [byte[]]) {
-            $responseText = [System.Text.Encoding]::UTF8.GetString($response.Content)
-        }
-        else {
-            $responseText = [string]$response.Content
-        }
-        Write-Host $responseText
-    }
-    if (
-        ($statusCode -eq 401) -and
-        (-not [string]::IsNullOrWhiteSpace($responseText)) -and
-        ($responseText -match "proxy authorization")
-    ) {
-        Write-Host "[HINT] Modal proxy auth expects a workspace Proxy Auth Token in Modal-Key/Modal-Secret."
-    }
-    Write-Host ""
-    $script:fail++
 }
 
 Write-Host "PerioGT Smoke Test - $BaseUrl"
 Write-Host "================================"
 
 Run-Test -Name "GET /v1/health" -Method "GET" -Path "/v1/health" -OperationTimeoutSeconds $healthOperationTimeoutSeconds
-Run-Test -Name "GET /v1/properties" -Method "GET" -Path "/v1/properties"
+Run-Test -Name "GET /v1/properties" -Method "GET" -Path "/v1/properties" -RetryStatusCode 503 -RetryDelaySeconds 5 -RetryWindowSeconds $defaultOperationTimeoutSeconds
 Run-Test -Name "POST /v1/predict (valid)" -Method "POST" -Path "/v1/predict" -JsonBody '{"smiles":"*CC*","property":"tg"}'
 Run-Test -Name "POST /v1/predict (invalid SMILES)" -Method "POST" -Path "/v1/predict" -JsonBody '{"smiles":"invalid","property":"tg"}' -ExpectedStatus 422
 Run-Test -Name "POST /v1/embeddings" -Method "POST" -Path "/v1/embeddings" -JsonBody '{"smiles":"*CC*"}'

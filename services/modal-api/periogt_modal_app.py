@@ -199,12 +199,12 @@ def _ensure_ready() -> None:
         # bootstrapping, wait until it finishes instead of failing this request.
         wait_timeout_s = _parse_positive_float_env(
             "PERIOGT_CHECKPOINT_WAIT_TIMEOUT_SECONDS",
-            240.0,
+            5.0,
             minimum=1.0,
         )
         wait_poll_s = _parse_positive_float_env(
             "PERIOGT_CHECKPOINT_WAIT_POLL_SECONDS",
-            2.0,
+            1.0,
             minimum=0.1,
         )
         wait_started = time.monotonic()
