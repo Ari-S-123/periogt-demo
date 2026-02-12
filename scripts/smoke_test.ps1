@@ -3,7 +3,9 @@
 # Usage: pwsh scripts/smoke_test.ps1 <BASE_URL>
 # Example: pwsh scripts/smoke_test.ps1 https://your-workspace--periogt-api-periogt-api.modal.run
 #
-# For Modal proxy auth, set MODAL_KEY and MODAL_SECRET env vars.
+# For Modal proxy auth, set either:
+#   - MODAL_KEY and MODAL_SECRET, or
+#   - MODAL_TOKEN_ID and MODAL_TOKEN_SECRET
 # For HPC server mode auth, set PERIOGT_API_KEY env var.
 
 param(
@@ -17,13 +19,91 @@ $ErrorActionPreference = "Stop"
 $BaseUrl = $BaseUrl.TrimEnd("/")
 $headers = @{}
 
-if (-not [string]::IsNullOrWhiteSpace($env:MODAL_KEY) -and -not [string]::IsNullOrWhiteSpace($env:MODAL_SECRET)) {
-    $headers["Modal-Key"] = $env:MODAL_KEY
-    $headers["Modal-Secret"] = $env:MODAL_SECRET
+$scriptDir = Split-Path -Parent $PSCommandPath
+$repoRoot = Split-Path -Parent $scriptDir
+$defaultEnvFile = Join-Path $repoRoot "apps/web/.env.local"
+
+$dotenvKeys = @(
+    "MODAL_KEY",
+    "MODAL_SECRET",
+    "MODAL_TOKEN_ID",
+    "MODAL_TOKEN_SECRET",
+    "PERIOGT_API_KEY"
+)
+
+if (Test-Path -LiteralPath $defaultEnvFile) {
+    Get-Content -LiteralPath $defaultEnvFile | ForEach-Object {
+        $line = $_.Trim()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith("#")) {
+            return
+        }
+
+        $idx = $line.IndexOf("=")
+        if ($idx -lt 1) {
+            return
+        }
+
+        $key = $line.Substring(0, $idx).Trim()
+        if (-not ($dotenvKeys -contains $key)) {
+            return
+        }
+
+        $value = $line.Substring($idx + 1).Trim().Trim('"').Trim("'")
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            return
+        }
+
+        $existing = [Environment]::GetEnvironmentVariable($key, "Process")
+        if ([string]::IsNullOrWhiteSpace($existing)) {
+            [Environment]::SetEnvironmentVariable($key, $value, "Process")
+        }
+    }
+}
+
+$modalKey = if (-not [string]::IsNullOrWhiteSpace($env:MODAL_KEY)) {
+    $env:MODAL_KEY
+}
+elseif (-not [string]::IsNullOrWhiteSpace($env:MODAL_TOKEN_ID)) {
+    $env:MODAL_TOKEN_ID
+}
+else {
+    $null
+}
+
+$modalSecret = if (-not [string]::IsNullOrWhiteSpace($env:MODAL_SECRET)) {
+    $env:MODAL_SECRET
+}
+elseif (-not [string]::IsNullOrWhiteSpace($env:MODAL_TOKEN_SECRET)) {
+    $env:MODAL_TOKEN_SECRET
+}
+else {
+    $null
+}
+
+if ((-not [string]::IsNullOrWhiteSpace($modalKey)) -and (-not [string]::IsNullOrWhiteSpace($modalSecret))) {
+    $headers["Modal-Key"] = $modalKey
+    $headers["Modal-Secret"] = $modalSecret
 }
 
 if (-not [string]::IsNullOrWhiteSpace($env:PERIOGT_API_KEY)) {
     $headers["X-Api-Key"] = $env:PERIOGT_API_KEY
+}
+
+$isModalRunUrl = $BaseUrl -match "\.modal\.run$" -or $BaseUrl -match "\.modal\.run/"
+if (
+    $isModalRunUrl -and
+    (-not [string]::IsNullOrWhiteSpace($modalKey)) -and
+    (-not [string]::IsNullOrWhiteSpace($modalSecret)) -and
+    ($modalKey -match "^ak") -and
+    ($modalSecret -match "^as")
+) {
+    Write-Host "[WARN] MODAL_KEY/MODAL_SECRET look like account tokens (ak/as)."
+    Write-Host "[WARN] Modal proxy auth expects workspace Proxy Auth tokens (wk/ws)."
+}
+if ($isModalRunUrl -and ([string]::IsNullOrWhiteSpace($modalKey) -or [string]::IsNullOrWhiteSpace($modalSecret))) {
+    Write-Host "[ERROR] Modal proxy credentials are required for this URL."
+    Write-Host "Set MODAL_KEY/MODAL_SECRET or MODAL_TOKEN_ID/MODAL_TOKEN_SECRET, then retry."
+    exit 2
 }
 
 $script:pass = 0
@@ -80,8 +160,22 @@ function Run-Test {
     }
 
     Write-Host "FAIL (expected $ExpectedStatus, got $statusCode)"
+    $responseText = $null
     if (-not [string]::IsNullOrEmpty($response.Content)) {
-        Write-Host $response.Content
+        if ($response.Content -is [byte[]]) {
+            $responseText = [System.Text.Encoding]::UTF8.GetString($response.Content)
+        }
+        else {
+            $responseText = [string]$response.Content
+        }
+        Write-Host $responseText
+    }
+    if (
+        ($statusCode -eq 401) -and
+        (-not [string]::IsNullOrWhiteSpace($responseText)) -and
+        ($responseText -match "proxy authorization")
+    ) {
+        Write-Host "[HINT] Modal proxy auth expects a workspace Proxy Auth Token in Modal-Key/Modal-Secret."
     }
     Write-Host ""
     $script:fail++
@@ -103,3 +197,4 @@ Write-Host "Results: $($script:pass) passed, $($script:fail) failed"
 if ($script:fail -gt 0) {
     exit 1
 }
+

@@ -58,7 +58,7 @@
 - For HPC behavior changes, include sample CLI invocations and expected exit behavior (`0`, `1`, `2`) when relevant.
 
 ## Security & Configuration Tips
-- Keep secrets in `apps/web/.env.local`; never commit `MODAL_KEY` or `MODAL_SECRET`.
+- Keep secrets in `apps/web/.env.local`; never commit `MODAL_KEY`, `MODAL_SECRET`, `MODAL_TOKEN_ID`, or `MODAL_TOKEN_SECRET`.
 - Server-only env vars should not use `NEXT_PUBLIC_` prefixes.
 - Validate proxy/auth behavior in `app/api/*` routes before exposing new backend endpoints.
 - In HPC server mode, `PERIOGT_API_KEY` is optional; if set, clients must send `X-Api-Key`.

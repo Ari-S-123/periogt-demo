@@ -32,7 +32,7 @@ bun run --filter web build
 modal serve services/modal-api/periogt_modal_app.py    # Local dev serving
 modal deploy services/modal-api/periogt_modal_app.py   # Deploy to Modal
 
-# Smoke tests (requires curl, jq; set MODAL_KEY/MODAL_SECRET env vars for auth)
+# Smoke tests (requires Modal proxy auth credentials)
 bash scripts/smoke_test.sh <MODAL_BASE_URL>
 ```
 
@@ -96,11 +96,19 @@ Stored in `apps/web/.env.local` (git-ignored). See `apps/web/.env.example`:
 
 ```
 MODAL_PERIOGT_URL=https://your-workspace--periogt-api-periogt-api.modal.run
-MODAL_KEY=your-modal-key
-MODAL_SECRET=your-modal-secret
+MODAL_KEY=wk_your_proxy_token_id
+MODAL_SECRET=ws_your_proxy_token_secret
+# Optional aliases accepted by smoke tests:
+# MODAL_TOKEN_ID=wk_your_proxy_token_id
+# MODAL_TOKEN_SECRET=ws_your_proxy_token_secret
 ```
 
 These are **server-only** (no `NEXT_PUBLIC_` prefix).
+
+Proxy auth token requirements:
+- Use workspace Proxy Auth tokens (`wk...` / `ws...`) for Modal proxy auth.
+- Account API tokens (`ak...` / `as...`) return `401 modal-http: invalid credentials for proxy authorization`.
+- Smoke test scripts auto-load `apps/web/.env.local` when shell env vars are unset.
 
 ## Conventions
 

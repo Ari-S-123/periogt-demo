@@ -86,9 +86,39 @@ Web server env (`apps/web/.env.local`):
 
 ```dotenv
 MODAL_PERIOGT_URL=https://your-workspace--periogt-api-periogt-api.modal.run
-MODAL_KEY=your-modal-key
-MODAL_SECRET=your-modal-secret
+MODAL_KEY=wk_your_proxy_token_id
+MODAL_SECRET=ws_your_proxy_token_secret
+# Optional aliases (smoke tests accept these too):
+# MODAL_TOKEN_ID=wk_your_proxy_token_id
+# MODAL_TOKEN_SECRET=ws_your_proxy_token_secret
 ```
+
+- `MODAL_KEY`/`MODAL_SECRET` (or `MODAL_TOKEN_ID`/`MODAL_TOKEN_SECRET`) must be **workspace Proxy Auth tokens**.
+- `ak...` / `as...` account API tokens do **not** satisfy Modal proxy auth for this backend.
+
+## Modal Proxy Auth Setup (Smoke Tests)
+
+The backend is deployed with `requires_proxy_auth=True`, so direct calls to `*.modal.run` must include proxy auth headers.
+
+1. Create a workspace Proxy Auth token in Modal dashboard (token ID starts with `wk`, secret starts with `ws`).
+2. Add credentials in `apps/web/.env.local`:
+   ```dotenv
+   MODAL_KEY=wk_...
+   MODAL_SECRET=ws_...
+   ```
+3. Optional: export per shell session instead of `.env.local`.
+   ```powershell
+   $env:MODAL_KEY="wk_..."
+   $env:MODAL_SECRET="ws_..."
+   pwsh scripts/smoke_test.ps1 "https://<workspace>--periogt-api-periogt-api-<env>.modal.run"
+   ```
+   ```bash
+   export MODAL_KEY="wk_..."
+   export MODAL_SECRET="ws_..."
+   bash scripts/smoke_test.sh "https://<workspace>--periogt-api-periogt-api-<env>.modal.run"
+   ```
+
+Both smoke scripts auto-load `apps/web/.env.local` if variables are not already set.
 
 HPC runtime env (set directly or via `services/hpc/slurm/setup_env.sh`):
 
