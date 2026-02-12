@@ -86,6 +86,9 @@ trap 'rm -f "${body_file}" "${err_file}"' EXIT
 
 pass=0
 fail=0
+CONNECT_TIMEOUT="${PERIOGT_SMOKE_CONNECT_TIMEOUT_SECONDS:-${PERIOGT_SMOKE_CONNECTION_TIMEOUT_SECONDS:-10}}"
+MAX_TIME="${PERIOGT_SMOKE_MAX_TIME_SECONDS:-${PERIOGT_SMOKE_OPERATION_TIMEOUT_SECONDS:-600}}"
+HEALTH_MAX_TIME="${PERIOGT_SMOKE_HEALTH_MAX_TIME_SECONDS:-${PERIOGT_SMOKE_HEALTH_TIMEOUT_SECONDS:-60}}"
 
 run_test() {
   local name="$1"
@@ -93,11 +96,21 @@ run_test() {
   local path="$3"
   local json_body="${4:-}"
   local expect_status="${5:-200}"
+  local max_time="${6:-$MAX_TIME}"
 
   echo -n "  ${name} ... "
 
   local url="${BASE_URL}${path}"
-  local -a curl_args=(curl "${auth_args[@]}" "${url}" -o "${body_file}" -w '%{http_code}' -sS)
+  local -a curl_args=(
+    curl
+    "${auth_args[@]}"
+    "${url}"
+    -o "${body_file}"
+    -w '%{http_code}'
+    -sS
+    --connect-timeout "${CONNECT_TIMEOUT}"
+    --max-time "${max_time}"
+  )
 
   if [[ "${method}" == "POST" ]]; then
     curl_args=(
@@ -110,6 +123,8 @@ run_test() {
       -o "${body_file}"
       -w '%{http_code}'
       -sS
+      --connect-timeout "${CONNECT_TIMEOUT}"
+      --max-time "${max_time}"
     )
   fi
 
@@ -139,7 +154,7 @@ run_test() {
 echo "PerioGT Smoke Test - ${BASE_URL}"
 echo "================================"
 
-run_test "GET /v1/health" "GET" "/v1/health"
+run_test "GET /v1/health" "GET" "/v1/health" "" "200" "${HEALTH_MAX_TIME}"
 run_test "GET /v1/properties" "GET" "/v1/properties"
 run_test "POST /v1/predict (valid)" "POST" "/v1/predict" '{"smiles":"*CC*","property":"tg"}'
 run_test "POST /v1/predict (invalid SMILES)" "POST" "/v1/predict" '{"smiles":"invalid","property":"tg"}' "422"

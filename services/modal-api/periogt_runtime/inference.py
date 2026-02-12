@@ -58,10 +58,15 @@ def predict_property(
         raise ValueError(error_msg)
 
     # Check property is supported
-    if property_id not in models.finetuned_models:
-        supported = list(models.finetuned_models.keys())
+    if property_id not in models.property_index:
+        supported = sorted(models.property_index.keys())
         raise ValueError(
             f"Unsupported property '{property_id}'. Supported: {supported}"
+        )
+
+    if property_id not in models.finetuned_models:
+        raise RuntimeError(
+            f"Model for property '{property_id}' is not loaded."
         )
 
     finetuned_model = models.finetuned_models[property_id]

@@ -36,6 +36,8 @@ bun dev
 modal serve services/modal-api/periogt_modal_app.py
 ```
 
+> First inference request on a cold container can take longer while runtime artifacts/models initialize.
+
 ## Quick Start (HPC CLI)
 
 ```bash
@@ -120,6 +122,12 @@ The backend is deployed with `requires_proxy_auth=True`, so direct calls to `*.m
 
 Both smoke scripts auto-load `apps/web/.env.local` if variables are not already set.
 
+Optional smoke-test timeout overrides:
+
+- `PERIOGT_SMOKE_CONNECTION_TIMEOUT_SECONDS` (or `PERIOGT_SMOKE_CONNECT_TIMEOUT_SECONDS`): optional connect timeout override (PowerShell script does not force a connect timeout unless this is set).
+- `PERIOGT_SMOKE_OPERATION_TIMEOUT_SECONDS` (or `PERIOGT_SMOKE_MAX_TIME_SECONDS`): request timeout for non-health endpoints, default `600`.
+- `PERIOGT_SMOKE_HEALTH_TIMEOUT_SECONDS` (or `PERIOGT_SMOKE_HEALTH_MAX_TIME_SECONDS`): request timeout for `/v1/health`, default `60`.
+
 HPC runtime env (set directly or via `services/hpc/slurm/setup_env.sh`):
 
 - `DGLBACKEND=pytorch` (required by DGL)
@@ -130,6 +138,17 @@ HPC runtime env (set directly or via `services/hpc/slurm/setup_env.sh`):
 - `PERIOGT_DEVICE` (`auto`, `cpu`, `cuda`)
 - `PERIOGT_RUNTIME_PACKAGE_DIR`
 - `PERIOGT_API_KEY` (optional, server mode auth)
+
+## Cold Start, Warmup, and GPU Sizing
+
+- `GET /v1/health` is intentionally non-blocking and should normally return quickly (typically under a few seconds).
+- Modal runtime startup now loads checkpoint metadata, scaler, and the pretrained backbone first; finetuned property heads load lazily on first use per property.
+- When multiple containers start at once, one container may bootstrap checkpoints while others wait; tune wait behavior with:
+  - `PERIOGT_CHECKPOINT_WAIT_TIMEOUT_SECONDS` (default `240`)
+  - `PERIOGT_CHECKPOINT_WAIT_POLL_SECONDS` (default `2`)
+- First request for a new property can still be slower due to finetuned checkpoint load. Subsequent requests for that property are warm.
+- A larger GPU primarily improves steady-state inference throughput/concurrency. It does not eliminate checkpoint download, Python import, or model deserialization overhead on cold start.
+- For this workload (single-item predictions with significant CPU-side preprocessing), cold-start and first-hit latency are usually improved more by warm containers/artifact locality than by switching to a bigger GPU tier.
 
 ## HPC Operational Notes
 

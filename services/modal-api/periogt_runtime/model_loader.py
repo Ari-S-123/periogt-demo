@@ -115,8 +115,12 @@ def load_finetuned_model(finetuned_ckpt_path: str, device: str = "cuda",
     return model
 
 
-def load_all_models(property_index: dict, pretrained_dir: str,
-                    device: str = "cuda") -> LoadedModels:
+def load_all_models(
+    property_index: dict,
+    pretrained_dir: str,
+    device: str = "cuda",
+    load_finetuned: bool = True,
+) -> LoadedModels:
     """
     Load pretrained model and all finetuned models specified in the property index.
 
@@ -124,6 +128,7 @@ def load_all_models(property_index: dict, pretrained_dir: str,
         property_index: Mapping from property ID to checkpoint info.
         pretrained_dir: Directory containing pretrained checkpoint(s).
         device: Device to load models onto.
+        load_finetuned: Whether to eagerly load all finetuned property models.
 
     Returns:
         LoadedModels with pretrained and finetuned models ready for inference.
@@ -143,18 +148,24 @@ def load_all_models(property_index: dict, pretrained_dir: str,
     pretrained_path = pretrained_candidates[0]
     loaded.pretrained_model = load_pretrained_model(pretrained_path, device)
 
-    # Load finetuned models for each property
-    for prop_id, info in property_index.items():
-        ckpt_path = info["checkpoint"]
-        if os.path.exists(ckpt_path):
-            try:
-                model = load_finetuned_model(ckpt_path, device)
-                loaded.finetuned_models[prop_id] = model
-                logger.info("Loaded finetuned model for property: %s", prop_id)
-            except Exception as e:
-                logger.error("Failed to load model for %s: %s", prop_id, e)
-        else:
-            logger.warning("Checkpoint not found for %s: %s", prop_id, ckpt_path)
+    if load_finetuned:
+        # Load finetuned models for each property
+        for prop_id, info in property_index.items():
+            ckpt_path = info["checkpoint"]
+            if os.path.exists(ckpt_path):
+                try:
+                    model = load_finetuned_model(ckpt_path, device)
+                    loaded.finetuned_models[prop_id] = model
+                    logger.info("Loaded finetuned model for property: %s", prop_id)
+                except Exception as e:
+                    logger.error("Failed to load model for %s: %s", prop_id, e)
+            else:
+                logger.warning("Checkpoint not found for %s: %s", prop_id, ckpt_path)
+    else:
+        logger.info(
+            "Skipping eager finetuned model preload. "
+            "Finetuned models will be loaded lazily per property."
+        )
 
     logger.info(
         "Model loading complete. Pretrained: %s, Finetuned properties: %s",

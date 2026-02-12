@@ -7,17 +7,18 @@ Local source paths are resolved relative to this file to avoid
 working-directory dependent deployments.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import os
 import posixpath
+import threading
 import time
 import uuid
 from pathlib import Path
 
 import modal
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,19 @@ from periogt_runtime.runtime_config import (
     DEFAULT_CHECKPOINT_DIR,
     add_src_dir_to_syspath,
 )
+from periogt_runtime.schemas import (
+    BatchPredictRequest,
+    BatchPredictResponse,
+    EmbeddingRequest,
+    EmbeddingResponse,
+    ErrorDetail,
+    ErrorResponse,
+    HealthResponse,
+    PredictRequest,
+    PredictResponse,
+    PropertiesResponse,
+    PropertyInfo,
+)
 
 
 def _canonical_modal_mount_path(raw_path: str) -> str:
@@ -100,6 +114,7 @@ def _canonical_modal_mount_path(raw_path: str) -> str:
 VOLUME_ROOT = _canonical_modal_mount_path(
     os.environ.get("PERIOGT_CHECKPOINT_DIR", DEFAULT_CHECKPOINT_DIR)
 )
+INDEX_PATH = posixpath.join(VOLUME_ROOT, "index.json")
 LABEL_STATS_PATH = posixpath.join(VOLUME_ROOT, "label_stats.json")
 SCALER_PATH = posixpath.join(VOLUME_ROOT, "descriptor_scaler.pkl")
 
@@ -115,66 +130,170 @@ _state: dict = {
     "property_index": {},
     "ready": False,
 }
+_bootstrap_lock = threading.Lock()
+_property_model_locks: dict[str, threading.Lock] = {}
+
+
+def _supported_properties() -> list[str]:
+    return sorted(_state["property_index"].keys())
+
+
+def _ensure_property_model_loaded(property_id: str) -> None:
+    models = _state["models"]
+    if models is None:
+        raise RuntimeError("Runtime is not initialized.")
+
+    if property_id in models.finetuned_models:
+        return
+
+    if property_id not in _state["property_index"]:
+        raise ValueError(
+            f"Unsupported property '{property_id}'. Supported: {_supported_properties()}"
+        )
+
+    lock = _property_model_locks.setdefault(property_id, threading.Lock())
+    with lock:
+        if property_id in models.finetuned_models:
+            return
+
+        info = _state["property_index"][property_id]
+        ckpt_path = info.get("checkpoint")
+        if not ckpt_path or not os.path.exists(ckpt_path):
+            raise RuntimeError(
+                f"Checkpoint not found for property '{property_id}': {ckpt_path}"
+            )
+
+        from periogt_runtime.model_loader import load_finetuned_model
+
+        started = time.monotonic()
+        model = load_finetuned_model(ckpt_path, device=str(models.device))
+        models.finetuned_models[property_id] = model
+        logger.info(
+            "Loaded finetuned model for '%s' in %.2fs",
+            property_id,
+            time.monotonic() - started,
+        )
 
 
 def _ensure_ready() -> None:
-    """Bootstrap models on first request (runs once per container)."""
+    """Bootstrap base runtime state on first request (runs once per container)."""
     if _state["ready"]:
         return
 
-    import pickle
-    import torch
+    with _bootstrap_lock:
+        if _state["ready"]:
+            return
 
-    # Ensure vendored PerioGT source is importable
-    add_src_dir_to_syspath()
+        import pickle
+        import torch
 
-    from periogt_runtime.checkpoint_manager import ensure_checkpoints
-    from periogt_runtime.model_loader import load_all_models
+        started = time.monotonic()
 
-    # Download / verify checkpoints
-    property_index = ensure_checkpoints(volume)
-    _state["property_index"] = property_index
+        # Ensure vendored PerioGT source is importable
+        add_src_dir_to_syspath()
 
-    # Load label stats (mean/std per property for denormalization)
-    volume.reload()
-    if os.path.exists(LABEL_STATS_PATH):
-        with open(LABEL_STATS_PATH) as f:
-            stats = json.load(f)
-        _state["label_mean"] = {k: v["mean"] for k, v in stats.items()}
-        _state["label_std"] = {k: v["std"] for k, v in stats.items()}
-        logger.info("Loaded label stats for %d properties", len(stats))
-    else:
-        logger.warning(
-            "No label_stats.json found at %s. "
-            "Predictions will be raw (normalized) model outputs. "
-            "To enable denormalization, place a label_stats.json on the Volume.",
-            LABEL_STATS_PATH,
+        from periogt_runtime.checkpoint_manager import ensure_checkpoints
+        from periogt_runtime.model_loader import load_all_models
+
+        # Download / verify checkpoints. If another container is already
+        # bootstrapping, wait until it finishes instead of failing this request.
+        wait_timeout_s = _parse_positive_float_env(
+            "PERIOGT_CHECKPOINT_WAIT_TIMEOUT_SECONDS",
+            240.0,
+            minimum=1.0,
+        )
+        wait_poll_s = _parse_positive_float_env(
+            "PERIOGT_CHECKPOINT_WAIT_POLL_SECONDS",
+            2.0,
+            minimum=0.1,
+        )
+        wait_started = time.monotonic()
+        while True:
+            try:
+                property_index = ensure_checkpoints(volume)
+                break
+            except RuntimeError as exc:
+                if "Another container is currently downloading checkpoints" not in str(exc):
+                    raise
+
+                elapsed = time.monotonic() - wait_started
+                if elapsed >= wait_timeout_s:
+                    raise RuntimeError(
+                        "Timed out waiting for checkpoint bootstrap in another container."
+                    ) from exc
+
+                logger.info(
+                    "Checkpoint bootstrap in progress in another container; "
+                    "waiting %.1fs (elapsed %.1fs / %.1fs).",
+                    wait_poll_s,
+                    elapsed,
+                    wait_timeout_s,
+                )
+                time.sleep(wait_poll_s)
+                volume.reload()
+        _state["property_index"] = property_index
+
+        # Load label stats (mean/std per property for denormalization)
+        volume.reload()
+        if os.path.exists(LABEL_STATS_PATH):
+            with open(LABEL_STATS_PATH) as f:
+                stats = json.load(f)
+            _state["label_mean"] = {k: v["mean"] for k, v in stats.items()}
+            _state["label_std"] = {k: v["std"] for k, v in stats.items()}
+            logger.info("Loaded label stats for %d properties", len(stats))
+        else:
+            logger.warning(
+                "No label_stats.json found at %s. "
+                "Predictions will be raw (normalized) model outputs. "
+                "To enable denormalization, place a label_stats.json on the Volume.",
+                LABEL_STATS_PATH,
+            )
+
+        # Load scaler for molecular descriptor normalization
+        if os.path.exists(SCALER_PATH):
+            with open(SCALER_PATH, "rb") as f:
+                _state["scaler"] = pickle.load(f)
+            logger.info("Loaded descriptor scaler from %s", SCALER_PATH)
+        else:
+            logger.warning(
+                "No descriptor_scaler.pkl found at %s. "
+                "A scaler will be fitted from scratch on first request (less accurate). "
+                "For production use, place a pre-fitted scaler on the Volume.",
+                SCALER_PATH,
+            )
+
+        # Load only the pretrained backbone; finetuned heads are loaded lazily per property.
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        models = load_all_models(
+            property_index,
+            VOLUME_ROOT,
+            device=device,
+            load_finetuned=False,
+        )
+        _state["models"] = models
+        _state["ready"] = True
+
+        logger.info(
+            "Container base runtime ready in %.2fs. Indexed properties: %d, GPU: %s",
+            time.monotonic() - started,
+            len(property_index),
+            torch.cuda.is_available(),
         )
 
-    # Load scaler for molecular descriptor normalization
-    if os.path.exists(SCALER_PATH):
-        with open(SCALER_PATH, "rb") as f:
-            _state["scaler"] = pickle.load(f)
-        logger.info("Loaded descriptor scaler from %s", SCALER_PATH)
-    else:
-        logger.warning(
-            "No descriptor_scaler.pkl found at %s. "
-            "A scaler will be fitted from scratch on first request (less accurate). "
-            "For production use, place a pre-fitted scaler on the Volume.",
-            SCALER_PATH,
-        )
 
-    # Load all models
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    models = load_all_models(property_index, VOLUME_ROOT, device=device)
-    _state["models"] = models
-    _state["ready"] = True
-
-    logger.info(
-        "Container ready. Properties: %s, GPU: %s",
-        list(models.finetuned_models.keys()),
-        torch.cuda.is_available(),
-    )
+def _parse_positive_float_env(name: str, default: float, minimum: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using default %.2f", name, raw, default)
+        return default
+    if value < minimum:
+        logger.warning("%s=%r is too small; using minimum %.2f", name, raw, minimum)
+        return minimum
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -194,22 +313,6 @@ def _ensure_ready() -> None:
 @modal.asgi_app(requires_proxy_auth=True)
 def periogt_api():
     import torch
-    from fastapi import FastAPI, HTTPException, Request
-    from fastapi.responses import JSONResponse
-
-    from periogt_runtime.schemas import (
-        BatchPredictRequest,
-        BatchPredictResponse,
-        EmbeddingRequest,
-        EmbeddingResponse,
-        ErrorDetail,
-        ErrorResponse,
-        HealthResponse,
-        PredictRequest,
-        PredictResponse,
-        PropertiesResponse,
-        PropertyInfo,
-    )
 
     web_app = FastAPI(
         title="PerioGT Inference API",
@@ -248,24 +351,34 @@ def periogt_api():
 
     # --- Routes ---
 
-    @web_app.get("/v1/health")
-    async def health() -> HealthResponse:
+    def ensure_ready_or_503() -> None:
         try:
             _ensure_ready()
-        except Exception:
-            pass
+        except RuntimeError as exc:
+            message = str(exc)
+            if "checkpoint" in message.lower():
+                raise HTTPException(
+                    status_code=503,
+                    detail="Model initialization in progress. Please retry shortly.",
+                ) from exc
+            raise
+
+    @web_app.get("/v1/health")
+    async def health() -> HealthResponse:
+        # Keep health non-blocking: do not trigger model loading here.
+        checkpoints_present = bool(_state["property_index"]) or os.path.exists(INDEX_PATH)
 
         return HealthResponse(
             status="ok" if _state["ready"] else "initializing",
             model_loaded=_state["models"] is not None
             and _state["models"].pretrained_model is not None,
-            checkpoints_present=bool(_state["property_index"]),
+            checkpoints_present=checkpoints_present,
             gpu_available=torch.cuda.is_available(),
         )
 
     @web_app.get("/v1/properties")
     async def list_properties() -> PropertiesResponse:
-        _ensure_ready()
+        ensure_ready_or_503()
         properties = []
         for prop_id, info in _state["property_index"].items():
             properties.append(
@@ -279,12 +392,13 @@ def periogt_api():
 
     @web_app.post("/v1/predict")
     async def predict(body: PredictRequest, request: Request) -> PredictResponse:
-        _ensure_ready()
+        ensure_ready_or_503()
         request_id = request.headers.get("x-request-id", str(uuid.uuid4()))
 
         from periogt_runtime.inference import predict_property
 
         try:
+            _ensure_property_model_loaded(body.property)
             result = predict_property(
                 smiles=body.smiles,
                 property_id=body.property,
@@ -303,7 +417,7 @@ def periogt_api():
     async def embeddings(
         body: EmbeddingRequest, request: Request
     ) -> EmbeddingResponse:
-        _ensure_ready()
+        ensure_ready_or_503()
         request_id = request.headers.get("x-request-id", str(uuid.uuid4()))
 
         from periogt_runtime.inference import compute_embedding
@@ -323,7 +437,7 @@ def periogt_api():
     async def predict_batch(
         body: BatchPredictRequest, request: Request
     ) -> BatchPredictResponse:
-        _ensure_ready()
+        ensure_ready_or_503()
         request_id = request.headers.get("x-request-id", str(uuid.uuid4()))
 
         from periogt_runtime.inference import predict_property
@@ -331,6 +445,7 @@ def periogt_api():
         results: list[PredictResponse | ErrorDetail] = []
         for item in body.items:
             try:
+                _ensure_property_model_loaded(item.property)
                 result = predict_property(
                     smiles=item.smiles,
                     property_id=item.property,

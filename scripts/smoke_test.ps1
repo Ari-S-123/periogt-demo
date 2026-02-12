@@ -108,6 +108,33 @@ if ($isModalRunUrl -and ([string]::IsNullOrWhiteSpace($modalKey) -or [string]::I
 
 $script:pass = 0
 $script:fail = 0
+$configuredConnectionTimeoutSeconds = if ($env:PERIOGT_SMOKE_CONNECTION_TIMEOUT_SECONDS) {
+    [int]$env:PERIOGT_SMOKE_CONNECTION_TIMEOUT_SECONDS
+}
+elseif ($env:PERIOGT_SMOKE_CONNECT_TIMEOUT_SECONDS) {
+    [int]$env:PERIOGT_SMOKE_CONNECT_TIMEOUT_SECONDS
+}
+else {
+    $null
+}
+$defaultOperationTimeoutSeconds = if ($env:PERIOGT_SMOKE_OPERATION_TIMEOUT_SECONDS) {
+    [int]$env:PERIOGT_SMOKE_OPERATION_TIMEOUT_SECONDS
+}
+elseif ($env:PERIOGT_SMOKE_MAX_TIME_SECONDS) {
+    [int]$env:PERIOGT_SMOKE_MAX_TIME_SECONDS
+}
+else {
+    600
+}
+$healthOperationTimeoutSeconds = if ($env:PERIOGT_SMOKE_HEALTH_TIMEOUT_SECONDS) {
+    [int]$env:PERIOGT_SMOKE_HEALTH_TIMEOUT_SECONDS
+}
+elseif ($env:PERIOGT_SMOKE_HEALTH_MAX_TIME_SECONDS) {
+    [int]$env:PERIOGT_SMOKE_HEALTH_MAX_TIME_SECONDS
+}
+else {
+    60
+}
 
 function Run-Test {
     param(
@@ -123,17 +150,25 @@ function Run-Test {
 
         [string]$JsonBody,
 
-        [int]$ExpectedStatus = 200
+        [int]$ExpectedStatus = 200,
+
+        [Nullable[int]]$ConnectionTimeoutSeconds = $configuredConnectionTimeoutSeconds,
+
+        [int]$OperationTimeoutSeconds = $defaultOperationTimeoutSeconds
     )
 
     Write-Host -NoNewline "  $Name ... "
 
     $uri = "$BaseUrl$Path"
     $requestParams = @{
-        Uri                = $uri
-        Method             = $Method
-        Headers            = $headers
-        SkipHttpErrorCheck = $true
+        Uri                      = $uri
+        Method                   = $Method
+        Headers                  = $headers
+        SkipHttpErrorCheck       = $true
+        OperationTimeoutSeconds  = $OperationTimeoutSeconds
+    }
+    if ($null -ne $ConnectionTimeoutSeconds) {
+        $requestParams["ConnectionTimeoutSeconds"] = [int]$ConnectionTimeoutSeconds
     }
 
     if ($Method -eq "POST") {
@@ -184,7 +219,7 @@ function Run-Test {
 Write-Host "PerioGT Smoke Test - $BaseUrl"
 Write-Host "================================"
 
-Run-Test -Name "GET /v1/health" -Method "GET" -Path "/v1/health"
+Run-Test -Name "GET /v1/health" -Method "GET" -Path "/v1/health" -OperationTimeoutSeconds $healthOperationTimeoutSeconds
 Run-Test -Name "GET /v1/properties" -Method "GET" -Path "/v1/properties"
 Run-Test -Name "POST /v1/predict (valid)" -Method "POST" -Path "/v1/predict" -JsonBody '{"smiles":"*CC*","property":"tg"}'
 Run-Test -Name "POST /v1/predict (invalid SMILES)" -Method "POST" -Path "/v1/predict" -JsonBody '{"smiles":"invalid","property":"tg"}' -ExpectedStatus 422
